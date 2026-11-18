@@ -176,42 +176,10 @@ namespace DiskFill.UI
                 Location = new Point(81, 43),
                 Text = "机械硬盘顺序覆写"
             };
-            var separator = new Panel
-            {
-                BackColor = AppTheme.Border,
-                Location = new Point(258, 21),
-                Size = new Size(1, 30)
-            };
-            var localText = new Label
-            {
-                AutoSize = true,
-                Font = AppTheme.Body,
-                ForeColor = AppTheme.Muted,
-                Location = new Point(279, 25),
-                Text = "本机运行，不联网，不上传任何磁盘信息"
-            };
-
-            var rightPanel = new Panel
-            {
-                Dock = DockStyle.Right,
-                Width = 180,
-                BackColor = AppTheme.Surface
-            };
-            var offlinePill = new StatusPill
-            {
-                Text = "离线运行",
-                Tone = PillTone.Accent,
-                Size = new Size(88, 26),
-                Location = new Point(64, 23)
-            };
-            rightPanel.Controls.Add(offlinePill);
 
             bar.Controls.Add(mark);
             bar.Controls.Add(title);
             bar.Controls.Add(subtitle);
-            bar.Controls.Add(separator);
-            bar.Controls.Add(localText);
-            bar.Controls.Add(rightPanel);
             return bar;
         }
 
@@ -335,14 +303,13 @@ namespace DiskFill.UI
                 Dock = DockStyle.Fill,
                 BackColor = AppTheme.Canvas,
                 ColumnCount = 1,
-                RowCount = 3,
+                RowCount = 2,
                 Margin = Padding.Empty,
                 Padding = Padding.Empty
             };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 78));
 
             var listHeader = new Panel
             {
@@ -375,16 +342,8 @@ namespace DiskFill.UI
                 Margin = Padding.Empty
             };
 
-            var notice = new NoticeBar
-            {
-                Dock = DockStyle.Fill,
-                Margin = new Padding(0, 8, 0, 0),
-                Text = "仅对非系统本地卷生效，已识别的 SSD 会被阻止。开始后会建立隐藏任务目录并顺序写入，不修改分区表；中途可暂停或继续。"
-            };
-
             layout.Controls.Add(listHeader, 0, 0);
             layout.Controls.Add(_driveFlow, 0, 1);
-            layout.Controls.Add(notice, 0, 2);
             view.Controls.Add(layout);
             return view;
         }
@@ -622,7 +581,7 @@ namespace DiskFill.UI
                 Dock = DockStyle.Fill,
                 BackColor = AppTheme.Surface,
                 ColumnCount = 1,
-                RowCount = 13,
+                RowCount = 12,
                 Margin = Padding.Empty,
                 Padding = Padding.Empty
             };
@@ -634,12 +593,11 @@ namespace DiskFill.UI
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 18));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
 
             var sideHeader = new Panel
             {
@@ -751,10 +709,12 @@ namespace DiskFill.UI
             _deleteAfterCompletionCheckBox = new CheckBox
             {
                 Dock = DockStyle.Fill,
+                AutoSize = false,
                 Font = AppTheme.Small,
                 ForeColor = AppTheme.Muted,
                 Text = "写满后自动删除填充文件",
-                Padding = new Padding(0, 5, 0, 0),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = Padding.Empty,
                 UseVisualStyleBackColor = true
             };
             _deleteAfterCompletionCheckBox.CheckedChanged += delegate
@@ -792,16 +752,6 @@ namespace DiskFill.UI
             };
             _primaryButton.Click += async delegate { await OnPrimaryActionAsync(); };
 
-            var finePrint = new Label
-            {
-                Dock = DockStyle.Fill,
-                Font = AppTheme.Small,
-                ForeColor = AppTheme.Faint,
-                Text = "不修改分区表 · 不需要管理员权限",
-                TextAlign = ContentAlignment.BottomLeft,
-                Margin = Padding.Empty
-            };
-
             layout.Controls.Add(sideHeader, 0, 0);
             layout.Controls.Add(selectionPanel, 0, 1);
             layout.Controls.Add(rule, 0, 2);
@@ -814,7 +764,6 @@ namespace DiskFill.UI
             layout.Controls.Add(new Panel { Dock = DockStyle.Fill, BackColor = AppTheme.Surface }, 0, 9);
             layout.Controls.Add(_cleanupButton, 0, 10);
             layout.Controls.Add(_primaryButton, 0, 11);
-            layout.Controls.Add(finePrint, 0, 12);
             side.Controls.Add(layout);
             return side;
         }
@@ -868,7 +817,7 @@ namespace DiskFill.UI
                 Font = AppTheme.Small,
                 ForeColor = AppTheme.Muted,
                 Location = new Point(44, 8),
-                Text = "本机处理 · 无遥测 · .NET Framework 4.8"
+                Text = "就绪 · .NET Framework 4.8"
             };
             var logLink = new LinkLabel
             {
@@ -957,7 +906,7 @@ namespace DiskFill.UI
                 AdjustDriveCardWidths();
                 _footerStatusLabel.Text = snapshot.Drives.Count == 0
                     ? "未发现可处理的本地磁盘"
-                    : "磁盘扫描完成 · 所有处理均在本机完成";
+                    : "磁盘扫描完成";
             }
             catch (Exception exception)
             {
