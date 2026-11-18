@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.0] - 2026-11-18
+
+### Changed
+
+- Replaced the short-window instantaneous speed estimate with a 15-second sliding throughput window.
+- Reduced UI progress churn to one update every 500 ms.
+- Reworked ETA to use sustained throughput and reset the sampling window after pause/resume.
+- Added throughput window regression tests and updated the on-screen speed labels.
+
 ## [1.0.0] - 2026-11-18
 
 ### Added

@@ -75,7 +75,7 @@ DiskFill 通过普通的 `FileStream` 在目标卷上创建分段文件，使用
 4. 默认写入确定性非零数据，避免全零文件被压缩卷或去重机制轻易压缩。
 5. FAT32 卷自动使用接近 `4 GiB` 的分片，其他文件系统使用更大的顺序分片。
 6. 捕获 `ERROR_DISK_FULL` 和 `ERROR_HANDLE_DISK_FULL` 作为正常完成条件。
-7. 每隔约 `220 ms` 更新速度、写入量、耗时和 ETA；界面线程不执行磁盘 I/O。
+7. 每隔约 `500 ms` 更新界面，速度使用最近 `15 秒` 的滑动窗口计算，避免 Windows 写缓存造成短时数值剧烈跳动。
 
 更完整的设计说明见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 

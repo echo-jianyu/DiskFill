@@ -10,7 +10,9 @@ namespace DiskFill.Core.Services
 {
     public sealed class FillEngine
     {
-        private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(220);
+        private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(500);
+        private static readonly TimeSpan ThroughputWindowDuration = TimeSpan.FromSeconds(15);
+        private static readonly TimeSpan MinimumThroughputSampleDuration = TimeSpan.FromSeconds(2);
 
         private readonly JobStore _jobStore;
         private readonly DataPatternGenerator _patternGenerator;
@@ -40,13 +42,15 @@ namespace DiskFill.Core.Services
             var stopwatch = Stopwatch.StartNew();
             var totalWritten = _jobStore.GetWrittenBytes(job);
             var buffer = new byte[FillOptions.WriteBufferSize];
-            long lastReportBytes = totalWritten;
             long lastReportTicks = stopwatch.ElapsedTicks;
-            double smoothedBytesPerSecond = 0;
+            var throughputWindow = new ThroughputWindow(
+                ThroughputWindowDuration,
+                MinimumThroughputSampleDuration);
+            throughputWindow.Reset(totalWritten, TimeSpan.Zero);
 
             job.State = FillJobState.Running;
             _jobStore.SaveQuietly(job);
-            Report(progress, job, totalWritten, stopwatch, smoothedBytesPerSecond, pauseController.IsPaused);
+            Report(progress, job, totalWritten, stopwatch, 0, pauseController.IsPaused);
             AppLog.Info("Fill job " + job.JobId + " started at byte offset " + totalWritten + ".");
 
             try
@@ -58,8 +62,8 @@ namespace DiskFill.Core.Services
                     await pauseController.WaitIfPausedAsync(cancellationToken).ConfigureAwait(false);
                     if (wasPaused)
                     {
-                        lastReportBytes = totalWritten;
                         lastReportTicks = stopwatch.ElapsedTicks;
+                        throughputWindow.Reset(totalWritten, stopwatch.Elapsed);
                     }
 
                     var segment = _jobStore.GetLastSegment(job);
@@ -83,8 +87,8 @@ namespace DiskFill.Core.Services
                             await pauseController.WaitIfPausedAsync(cancellationToken).ConfigureAwait(false);
                             if (wasPausedInSegment)
                             {
-                                lastReportBytes = totalWritten;
                                 lastReportTicks = stopwatch.ElapsedTicks;
+                                throughputWindow.Reset(totalWritten, stopwatch.Elapsed);
                             }
 
                             var remainingInSegment = job.SegmentSize - segmentLength;
@@ -103,9 +107,8 @@ namespace DiskFill.Core.Services
                                 job,
                                 totalWritten,
                                 stopwatch,
-                                ref lastReportBytes,
                                 ref lastReportTicks,
-                                ref smoothedBytesPerSecond,
+                                throughputWindow,
                                 pauseController.IsPaused,
                                 false);
                         }
@@ -122,7 +125,7 @@ namespace DiskFill.Core.Services
                 job.WrittenBytes = totalWritten;
                 job.State = FillJobState.Completed;
                 _jobStore.SaveQuietly(job);
-                Report(progress, job, totalWritten, stopwatch, smoothedBytesPerSecond, false);
+                ReportCurrent(progress, job, totalWritten, stopwatch, throughputWindow, false);
                 AppLog.Info("Fill job " + job.JobId + " completed at " + totalWritten + " bytes.");
 
                 return new FillResult
@@ -139,7 +142,7 @@ namespace DiskFill.Core.Services
                 job.WrittenBytes = totalWritten;
                 job.State = FillJobState.Paused;
                 _jobStore.SaveQuietly(job);
-                Report(progress, job, totalWritten, stopwatch, smoothedBytesPerSecond, true);
+                ReportCurrent(progress, job, totalWritten, stopwatch, throughputWindow, true);
                 AppLog.Info("Fill job " + job.JobId + " stopped at " + totalWritten + " bytes.");
                 return new FillResult
                 {
@@ -154,7 +157,7 @@ namespace DiskFill.Core.Services
                 job.WrittenBytes = totalWritten;
                 job.State = FillJobState.Completed;
                 _jobStore.SaveQuietly(job);
-                Report(progress, job, totalWritten, stopwatch, smoothedBytesPerSecond, false);
+                ReportCurrent(progress, job, totalWritten, stopwatch, throughputWindow, false);
                 AppLog.Info("Fill job " + job.JobId + " reached disk capacity at " + totalWritten + " bytes.");
                 return new FillResult
                 {
@@ -206,9 +209,8 @@ namespace DiskFill.Core.Services
             FillJob job,
             long writtenBytes,
             Stopwatch stopwatch,
-            ref long lastReportBytes,
             ref long lastReportTicks,
-            ref double smoothedBytesPerSecond,
+            ThroughputWindow throughputWindow,
             bool isPaused,
             bool force)
         {
@@ -218,18 +220,23 @@ namespace DiskFill.Core.Services
                 return;
             }
 
-            var elapsedSeconds = (double)elapsedTicks / Stopwatch.Frequency;
-            if (elapsedSeconds > 0)
-            {
-                var currentRate = Math.Max(0, writtenBytes - lastReportBytes) / elapsedSeconds;
-                smoothedBytesPerSecond = smoothedBytesPerSecond <= 0
-                    ? currentRate
-                    : smoothedBytesPerSecond * 0.72 + currentRate * 0.28;
-            }
-
-            lastReportBytes = writtenBytes;
             lastReportTicks = stopwatch.ElapsedTicks;
-            Report(progress, job, writtenBytes, stopwatch, smoothedBytesPerSecond, isPaused);
+            throughputWindow.Record(writtenBytes, stopwatch.Elapsed);
+            throughputWindow.TryGetBytesPerSecond(out double bytesPerSecond);
+            Report(progress, job, writtenBytes, stopwatch, bytesPerSecond, isPaused);
+        }
+
+        private static void ReportCurrent(
+            IProgress<FillProgress> progress,
+            FillJob job,
+            long writtenBytes,
+            Stopwatch stopwatch,
+            ThroughputWindow throughputWindow,
+            bool isPaused)
+        {
+            throughputWindow.Record(writtenBytes, stopwatch.Elapsed);
+            throughputWindow.TryGetBytesPerSecond(out double bytesPerSecond);
+            Report(progress, job, writtenBytes, stopwatch, bytesPerSecond, isPaused);
         }
 
         private static void Report(

@@ -451,7 +451,7 @@ namespace DiskFill.UI
             metrics.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
 
             _writtenMetric = new MetricView { Dock = DockStyle.Fill, Caption = "已写入", Margin = new Padding(0) };
-            _speedMetric = new MetricView { Dock = DockStyle.Fill, Caption = "当前速度", Margin = new Padding(12, 0, 0, 0) };
+            _speedMetric = new MetricView { Dock = DockStyle.Fill, Caption = "持续速度", Margin = new Padding(12, 0, 0, 0) };
             _elapsedMetric = new MetricView { Dock = DockStyle.Fill, Caption = "已用时间", Margin = new Padding(0) };
             _etaMetric = new MetricView { Dock = DockStyle.Fill, Caption = "预计剩余", Margin = new Padding(12, 0, 0, 0) };
             metrics.Controls.Add(_writtenMetric, 0, 0);
@@ -838,7 +838,7 @@ namespace DiskFill.UI
                 ForeColor = AppTheme.Faint,
                 Anchor = AnchorStyles.Top | AnchorStyles.Right,
                 Location = new Point(footer.Width - 74, 8),
-                Text = "v1.0.0"
+                Text = "v1.1.0"
             };
             footer.Resize += delegate
             {
@@ -1437,12 +1437,13 @@ namespace DiskFill.UI
             _capacityEndLabel.Text = ByteFormatter.Format(job.PlannedBytes);
             _writtenMetric.Value = ByteFormatter.Format(job.WrittenBytes);
             _writtenMetric.Note = "计划 " + ByteFormatter.Format(job.PlannedBytes);
+            _speedMetric.Caption = "持续速度";
             _speedMetric.Value = "--";
-            _speedMetric.Note = "顺序写入";
+            _speedMetric.Note = "最近 15 秒平均";
             _elapsedMetric.Value = "00:00";
             _elapsedMetric.Note = "本机计时";
             _etaMetric.Value = "--";
-            _etaMetric.Note = "根据当前速度估算";
+            _etaMetric.Note = "按持续速度估算";
             _pauseButton.Text = "暂停写入";
             _pauseButton.Glyph = ButtonGlyph.Pause;
             _pauseButton.Enabled = true;
@@ -1484,7 +1485,7 @@ namespace DiskFill.UI
             _writtenMetric.Value = ByteFormatter.Format(progress.WrittenBytes);
             _writtenMetric.Note = "计划 " + ByteFormatter.Format(progress.TotalBytes);
             _speedMetric.Value = ByteFormatter.FormatRate(progress.BytesPerSecond);
-            _speedMetric.Note = "4 MiB 顺序写入";
+            _speedMetric.Note = "最近 15 秒平均";
             var elapsed = TimeSpan.FromSeconds(progress.ElapsedSeconds);
             _elapsedMetric.Value = TimeFormatter.FormatElapsed(elapsed);
             _elapsedMetric.Note = "本次任务";
@@ -1630,7 +1631,8 @@ namespace DiskFill.UI
                 ? result.WrittenBytes / result.Elapsed.TotalSeconds
                 : 0;
             _speedMetric.Value = ByteFormatter.FormatRate(averageRate);
-            _speedMetric.Note = "平均速度";
+            _speedMetric.Caption = "平均速度";
+            _speedMetric.Note = "全程平均";
             _elapsedMetric.Value = TimeFormatter.FormatElapsed(result.Elapsed);
             _elapsedMetric.Note = "总耗时";
             _etaMetric.Value = "0 分钟";

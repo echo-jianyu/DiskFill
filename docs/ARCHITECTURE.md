@@ -130,7 +130,8 @@ written_bytes   = sum(length of all existing part files)
 - 取消令牌在每次写入块前检查。
 - 暂停使用 `ManualResetEventSlim` 包装的 `PauseController`。
 - 任务运行期间调用 `SetThreadExecutionState`，避免系统自动睡眠。
-- UI 进度报告限制在约 `220 ms` 一次，防止消息队列被高频进度淹没。
+- UI 进度报告限制在约 `500 ms` 一次，防止消息队列被高频进度淹没。
+- 速度使用最近 `15 秒` 的滑动窗口计算，ETA 使用该持续速度估算，以平滑 Windows 写缓存引起的短时吞吐波动。
 
 ## 状态机
 

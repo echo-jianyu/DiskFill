@@ -13,7 +13,7 @@ $artifactsDirectory = Join-Path $root "artifacts"
 [xml]$projectXml = Get-Content -LiteralPath $project
 $version = [string]$projectXml.Project.PropertyGroup.Version
 if ([string]::IsNullOrWhiteSpace($version)) {
-    $version = "1.0.0"
+    $version = "1.1.0"
 }
 
 $resolvedRoot = [System.IO.Path]::GetFullPath($root).TrimEnd('\')
