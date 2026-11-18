@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="DiskFill.Tests/DiskFill.Tests.csproj" />
+  <Project Path="DiskFill/DiskFill.csproj" />
+</Solution>
