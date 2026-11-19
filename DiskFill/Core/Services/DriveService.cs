@@ -92,6 +92,23 @@ namespace DiskFill.Core.Services
                 mediaKind = incursSeekPenalty ? MediaKind.Rotational : MediaKind.SolidState;
             }
 
+            int? physicalDiskNumber = null;
+            var spansMultiplePhysicalDisks = false;
+            if (NativeMethods.TryGetVolumeDiskNumbers(
+                drive.RootDirectory.FullName,
+                out int[] diskNumbers))
+            {
+                var distinctDisks = diskNumbers.Distinct().ToArray();
+                if (distinctDisks.Length == 1)
+                {
+                    physicalDiskNumber = distinctDisks[0];
+                }
+                else if (distinctDisks.Length > 1)
+                {
+                    spansMultiplePhysicalDisks = true;
+                }
+            }
+
             var protectionReason = SystemVolumeGuard.GetProtectionReason(drive.RootDirectory.FullName);
             var ineligibleReason = protectionReason;
             if (string.IsNullOrEmpty(ineligibleReason) && mediaKind == MediaKind.SolidState)
@@ -116,6 +133,8 @@ namespace DiskFill.Core.Services
                 TotalBytes = drive.TotalSize,
                 AvailableBytes = drive.AvailableFreeSpace,
                 MediaKind = mediaKind,
+                PhysicalDiskNumber = physicalDiskNumber,
+                SpansMultiplePhysicalDisks = spansMultiplePhysicalDisks,
                 IneligibleReason = ineligibleReason
             };
         }

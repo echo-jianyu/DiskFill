@@ -11,6 +11,7 @@ namespace DiskFill.UI.Controls
     {
         private bool _hovered;
         private bool _selected;
+        private int _selectionIndex;
         private JobInspection _inspection;
 
         public DriveCard(DriveTarget drive)
@@ -53,9 +54,34 @@ namespace DiskFill.UI.Controls
             }
         }
 
+        public int SelectionIndex
+        {
+            get { return _selectionIndex; }
+            set
+            {
+                if (_selectionIndex == value)
+                {
+                    return;
+                }
+
+                _selectionIndex = value;
+                Invalidate();
+            }
+        }
+
+        public bool IsSelectable
+        {
+            get
+            {
+                return Drive.IsEligible
+                    || (_inspection != null && _inspection.HasJob && !_inspection.HasIssue);
+            }
+        }
+
         public void SetInspection(JobInspection inspection)
         {
             _inspection = inspection;
+            Cursor = IsSelectable ? Cursors.Hand : Cursors.Default;
             AccessibleDescription = GetAccessibleDescription();
             Invalidate();
         }
@@ -97,6 +123,10 @@ namespace DiskFill.UI.Controls
                 AppTheme.Scale(this, 42),
                 AppTheme.Scale(this, 42));
             DrawDriveGlyph(e.Graphics, iconRect);
+            if (_selected && _selectionIndex > 0)
+            {
+                DrawSelectionIndex(e.Graphics, iconRect);
+            }
 
             var rightWidth = AppTheme.Scale(this, 132);
             var textLeft = AppTheme.Scale(this, 74);
@@ -116,7 +146,8 @@ namespace DiskFill.UI.Controls
                 | TextFormatFlags.NoPadding);
 
             var details = Drive.MediaDescription + "  ·  " + Drive.FileSystem + "  ·  "
-                + ByteFormatter.Format(Drive.TotalBytes);
+                + ByteFormatter.Format(Drive.TotalBytes) + "  ·  "
+                + Drive.PhysicalDiskDescription;
             TextRenderer.DrawText(
                 e.Graphics,
                 details,
@@ -290,6 +321,34 @@ namespace DiskFill.UI.Controls
             }
         }
 
+        private void DrawSelectionIndex(Graphics graphics, Rectangle iconBounds)
+        {
+            var size = AppTheme.Scale(this, 18);
+            var bounds = new Rectangle(
+                iconBounds.Right - size + AppTheme.Scale(this, 1),
+                iconBounds.Bottom - size + AppTheme.Scale(this, 1),
+                size,
+                size);
+            using (var brush = new SolidBrush(AppTheme.Accent))
+            {
+                graphics.FillEllipse(brush, bounds);
+            }
+
+            using (var font = new Font("Microsoft YaHei UI", 7.5F, FontStyle.Bold))
+            {
+                TextRenderer.DrawText(
+                    graphics,
+                    _selectionIndex.ToString(),
+                    font,
+                    bounds,
+                    Color.White,
+                    TextFormatFlags.HorizontalCenter
+                    | TextFormatFlags.VerticalCenter
+                    | TextFormatFlags.SingleLine
+                    | TextFormatFlags.NoPadding);
+            }
+        }
+
         private string GetThirdLine()
         {
             if (_inspection != null && _inspection.HasIssue)
@@ -359,6 +418,7 @@ namespace DiskFill.UI.Controls
         {
             return Drive.MediaDescription
                 + "，文件系统 " + Drive.FileSystem
+                + "，" + Drive.PhysicalDiskDescription
                 + "，可用 " + ByteFormatter.Format(Drive.AvailableBytes)
                 + (Drive.IsEligible ? "。" : "。" + Drive.IneligibleReason + "。");
         }

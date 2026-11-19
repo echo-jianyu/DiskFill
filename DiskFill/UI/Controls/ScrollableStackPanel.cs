@@ -5,7 +5,7 @@ using System.Windows.Forms;
 
 namespace DiskFill.UI.Controls
 {
-    internal sealed class DriveListPanel : Panel
+    internal sealed class ScrollableStackPanel : Panel
     {
         private const int SbHorizontal = 0;
 
@@ -13,7 +13,7 @@ namespace DiskFill.UI.Controls
         private int _lastLayoutHeight = -1;
         private bool _isRelayouting;
 
-        public DriveListPanel()
+        public ScrollableStackPanel()
         {
             AutoScroll = true;
             BackColor = AppTheme.Canvas;

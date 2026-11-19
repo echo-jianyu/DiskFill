@@ -67,6 +67,26 @@ namespace DiskFill.Tests
         }
 
         [Fact]
+        public void FillJob_CompatibilityRejectsAChangedPhysicalDisk()
+        {
+            var drive = new DriveTarget
+            {
+                VolumeSerial = "A1B2C3D4",
+                TotalBytes = 1000,
+                PhysicalDiskNumber = 3
+            };
+            var job = new FillJob
+            {
+                SchemaVersion = FillJob.CurrentSchemaVersion,
+                VolumeSerial = "A1B2C3D4",
+                VolumeSize = 1000,
+                PhysicalDiskNumber = 2
+            };
+
+            Assert.False(job.IsCompatibleWith(drive));
+        }
+
+        [Fact]
         public void JobStore_RemovesAnOrphanedTemporaryManifest()
         {
             var root = Path.Combine(

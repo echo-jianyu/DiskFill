@@ -8,7 +8,7 @@ DiskFill 的核心目标是：在不修改分区表和文件系统的前提下�
 
 1. 不误写系统盘或非目标卷。
 2. 写入过程可暂停、可停止、可恢复。
-3. 对机械硬盘保持高顺序吞吐。
+3. 对机械硬盘保持高顺序吞吐，并允许不同物理磁盘并行推进。
 4. UI 与磁盘 I/O 解耦，长任务不冻结界面。
 5. 运行时零第三方依赖，兼容系统自带的 `.NET Framework 4.8`。
 
@@ -20,7 +20,7 @@ UI
         |
         v
 Core.Services
-  DriveService / JobStore / FillEngine / SystemVolumeGuard
+  DriveService / JobStore / FillEngine / SystemVolumeGuard / PhysicalDiskSelectionGuard
         |
         v
 Core.Infrastructure
@@ -41,6 +41,14 @@ IOCTL_STORAGE_QUERY_PROPERTY
 ```
 
 如果设备存在寻道代价，则标记为机械硬盘。没有寻道代价的设备标记为固态硬盘并禁止开始任务。部分 USB 桥接芯片可能不提供可靠信息，此时显示“介质类型未知”，由用户确认。
+
+卷与物理磁盘的映射通过：
+
+```text
+IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS
+```
+
+查询卷的磁盘 Extent。只有能够确认位于不同物理磁盘的卷才能同时选择。同一物理磁盘上的多个分区会被并行选择保护阻止，因为并发磁头寻道会降低顺序吞吐。
 
 `SystemVolumeGuard` 会拒绝以下卷：
 
@@ -78,6 +86,20 @@ written_bytes   = sum(length of all existing part files)
 恢复时不需要完全信任清单中的进度。程序以分段文件的实际长度为准，因此即使进程在清单刷新前崩溃，也不会重复写过或跳过数据。
 
 每个 `4 MiB` 缓冲区的数据由绝对偏移决定，所以中断后重新生成相同位置的数据仍然保持一致。
+
+## 并行任务模型
+
+每个入选卷拥有独立的 `FillJob`、任务清单、分段文件和 `PauseController`。UI 会为每块物理磁盘启动一个独立的 `FillEngine.RunAsync`，共享同一个取消令牌：
+
+- 写入仍按磁盘分别保持单一顺序流。
+- 暂停、继续和停止同时作用于全部并行任务。
+- 合计速度是仍在运行的磁盘持续速度之和。
+- 总进度按所有任务计划写入量加权。
+- ETA 取所有未完成磁盘中最大的剩余时间，即最慢磁盘的预计完成时间。
+- 任一磁盘失败时，其他磁盘继续完成当前任务；最终结果报告失败卷和对应错误。
+- 多盘实时页面为每个任务维护独立进度卡片，单盘百分比、写入量、持续速度和 ETA 不会互相覆盖；顶部仅展示明确标记的合计摘要。
+
+自动化测试还验证了同一个 `FillEngine` 可以安全地并行填写不同临时任务目录。
 
 ## 完成与错误
 
@@ -168,5 +190,7 @@ stateDiagram-v2
 - FAT32 与 NTFS 分片大小。
 - Windows 磁盘满错误码。
 - 系统盘保护与卷兼容性。
+- 不同物理磁盘并行选择与同盘冲突拦截。
+- 多个独立任务目录的并行引擎写入。
 
 界面通过 `tools/PreviewRenderer` 生成离屏截图，覆盖主界面、最小窗口、运行态、完成态和确认对话框。

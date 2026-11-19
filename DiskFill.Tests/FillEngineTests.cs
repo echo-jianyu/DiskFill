@@ -74,6 +74,51 @@ namespace DiskFill.Tests
         }
 
         [Fact]
+        public async Task RunAsync_CanFillIndependentJobDirectoriesConcurrently()
+        {
+            var firstDirectory = CreateTemporaryDirectory();
+            var secondDirectory = CreateTemporaryDirectory();
+            try
+            {
+                var firstJob = CreateJob(
+                    firstDirectory,
+                    3L * 1024 * 1024,
+                    8L * 1024 * 1024);
+                var secondJob = CreateJob(
+                    secondDirectory,
+                    4L * 1024 * 1024,
+                    8L * 1024 * 1024);
+                var engine = new FillEngine(new JobStore(), new DataPatternGenerator());
+
+                using (var firstPause = new PauseController())
+                using (var secondPause = new PauseController())
+                {
+                    var results = await Task.WhenAll(
+                        engine.RunAsync(firstJob, null, firstPause, CancellationToken.None),
+                        engine.RunAsync(secondJob, null, secondPause, CancellationToken.None));
+
+                    Assert.All(results, result => Assert.True(result.IsSuccess));
+                }
+
+                Assert.Equal(
+                    firstJob.PlannedBytes,
+                    new FileInfo(Path.Combine(
+                        firstDirectory,
+                        JobStore.GetSegmentFileName(1))).Length);
+                Assert.Equal(
+                    secondJob.PlannedBytes,
+                    new FileInfo(Path.Combine(
+                        secondDirectory,
+                        JobStore.GetSegmentFileName(1))).Length);
+            }
+            finally
+            {
+                Directory.Delete(firstDirectory, true);
+                Directory.Delete(secondDirectory, true);
+            }
+        }
+
+        [Fact]
         public void IsDiskFull_RecognizesWindowsDiskFullCodes()
         {
             var diskFull = new IOException(

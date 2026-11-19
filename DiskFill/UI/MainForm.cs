@@ -21,13 +21,18 @@ namespace DiskFill.UI
         private readonly JobStore _jobStore = new JobStore();
         private readonly FillEngine _fillEngine;
         private readonly List<DriveCard> _driveCards = new List<DriveCard>();
+        private readonly List<DriveCard> _selectedCards = new List<DriveCard>();
+        private readonly List<DriveProgressCard> _runProgressCards = new List<DriveProgressCard>();
 
         private readonly ToolTip _toolTip = new ToolTip();
         private TableLayoutPanel _rootLayout;
         private Panel _topBar;
         private Panel _idleView;
         private Panel _runView;
-        private DriveListPanel _driveFlow;
+        private Panel _singleProgressView;
+        private Panel _multiProgressView;
+        private ScrollableStackPanel _driveFlow;
+        private ScrollableStackPanel _runProgressList;
         private Label _driveCountLabel;
         private Label _footerStatusLabel;
         private ActionButton _refreshButton;
@@ -57,12 +62,15 @@ namespace DiskFill.UI
         private MetricView _speedMetric;
         private MetricView _elapsedMetric;
         private MetricView _etaMetric;
+        private MetricView _multiWrittenMetric;
+        private MetricView _multiSpeedMetric;
+        private MetricView _multiEtaMetric;
 
         private DriveTarget _selectedDrive;
         private JobInspection _selectedInspection;
-        private FillJob _activeJob;
+        private readonly List<RunSession> _runSessions = new List<RunSession>();
         private CancellationTokenSource _runCancellation;
-        private PauseController _pauseController;
+        private Stopwatch _runStopwatch;
         private ExecutionStateScope _executionStateScope;
         private OverwriteMode _selectedMode = OverwriteMode.FastNonZero;
         private ScreenState _screenState = ScreenState.Idle;
@@ -336,7 +344,7 @@ namespace DiskFill.UI
             listHeader.Controls.Add(listTitle);
             listHeader.Controls.Add(_driveCountLabel);
 
-            _driveFlow = new DriveListPanel
+            _driveFlow = new ScrollableStackPanel
             {
                 Dock = DockStyle.Fill,
                 Margin = Padding.Empty
@@ -462,6 +470,87 @@ namespace DiskFill.UI
             progressTable.Controls.Add(ringHost, 0, 0);
             progressTable.Controls.Add(metrics, 1, 0);
 
+            _singleProgressView = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = AppTheme.Canvas,
+                Margin = Padding.Empty
+            };
+            _singleProgressView.Controls.Add(progressTable);
+
+            _multiProgressView = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = AppTheme.Canvas,
+                Margin = Padding.Empty,
+                Visible = false
+            };
+            var multiLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = AppTheme.Canvas,
+                ColumnCount = 1,
+                RowCount = 2,
+                Margin = Padding.Empty,
+                Padding = Padding.Empty
+            };
+            multiLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            multiLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
+            multiLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+            var multiMetrics = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = AppTheme.Canvas,
+                ColumnCount = 3,
+                RowCount = 1,
+                Margin = Padding.Empty,
+                Padding = Padding.Empty
+            };
+            multiMetrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34));
+            multiMetrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
+            multiMetrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
+            multiMetrics.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            _multiWrittenMetric = new MetricView
+            {
+                Dock = DockStyle.Fill,
+                Caption = "合计写入",
+                Margin = Padding.Empty
+            };
+            _multiSpeedMetric = new MetricView
+            {
+                Dock = DockStyle.Fill,
+                Caption = "合计速度",
+                Margin = new Padding(14, 0, 0, 0)
+            };
+            _multiEtaMetric = new MetricView
+            {
+                Dock = DockStyle.Fill,
+                Caption = "预计完成",
+                Margin = new Padding(14, 0, 0, 0)
+            };
+            multiMetrics.Controls.Add(_multiWrittenMetric, 0, 0);
+            multiMetrics.Controls.Add(_multiSpeedMetric, 1, 0);
+            multiMetrics.Controls.Add(_multiEtaMetric, 2, 0);
+
+            _runProgressList = new ScrollableStackPanel
+            {
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 8, 0, 0)
+            };
+            multiLayout.Controls.Add(multiMetrics, 0, 0);
+            multiLayout.Controls.Add(_runProgressList, 0, 1);
+            _multiProgressView.Controls.Add(multiLayout);
+
+            var progressHost = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = AppTheme.Canvas,
+                Margin = Padding.Empty
+            };
+            progressHost.Controls.Add(_multiProgressView);
+            progressHost.Controls.Add(_singleProgressView);
+
             var capacityPanel = new Panel
             {
                 Dock = DockStyle.Fill,
@@ -552,7 +641,7 @@ namespace DiskFill.UI
             actions.Controls.Add(_stopButton);
 
             layout.Controls.Add(heading, 0, 0);
-            layout.Controls.Add(progressTable, 0, 1);
+            layout.Controls.Add(progressHost, 0, 1);
             layout.Controls.Add(capacityPanel, 0, 2);
             layout.Controls.Add(actions, 0, 3);
             view.Controls.Add(layout);
@@ -838,7 +927,7 @@ namespace DiskFill.UI
                 ForeColor = AppTheme.Faint,
                 Anchor = AnchorStyles.Top | AnchorStyles.Right,
                 Location = new Point(footer.Width - 74, 8),
-                Text = "v1.1.0"
+                Text = "v1.2.0"
             };
             footer.Resize += delegate
             {
@@ -867,6 +956,9 @@ namespace DiskFill.UI
             {
                 var preferred = preferredRoot ?? (_selectedDrive == null ? null : _selectedDrive.RootPath);
                 var snapshot = await Task.Run(() => LoadDriveSnapshot());
+                var previousSelectedRoots = _selectedCards
+                    .Select(card => card.Drive.RootPath)
+                    .ToList();
 
                 ClearDriveCards();
                 foreach (var drive in snapshot.Drives)
@@ -894,15 +986,27 @@ namespace DiskFill.UI
                     AddEmptyDriveState();
                 }
 
-                var selectedCard = _driveCards.FirstOrDefault(
-                    card => string.Equals(card.Drive.RootPath, preferred, StringComparison.OrdinalIgnoreCase));
-                if (selectedCard == null)
+                var preferredRoots = new HashSet<string>(
+                    previousSelectedRoots,
+                    StringComparer.OrdinalIgnoreCase);
+                if (!string.IsNullOrEmpty(preferred))
                 {
-                    selectedCard = _driveCards.FirstOrDefault(card => card.Drive.IsEligible)
-                        ?? _driveCards.FirstOrDefault();
+                    preferredRoots.Add(preferred);
                 }
 
-                SelectDrive(selectedCard);
+                var restoredSelections = _driveCards
+                    .Where(card => preferredRoots.Contains(card.Drive.RootPath) && card.IsSelectable)
+                    .ToList();
+                if (restoredSelections.Count == 0)
+                {
+                    var firstEligible = _driveCards.FirstOrDefault(card => card.IsSelectable);
+                    if (firstEligible != null)
+                    {
+                        restoredSelections.Add(firstEligible);
+                    }
+                }
+
+                SetSelectedCards(restoredSelections);
                 AdjustDriveCardWidths();
                 _footerStatusLabel.Text = snapshot.Drives.Count == 0
                     ? "未发现可处理的本地磁盘"
@@ -948,6 +1052,9 @@ namespace DiskFill.UI
             }
 
             _driveCards.Clear();
+            _selectedCards.Clear();
+            _selectedDrive = null;
+            _selectedInspection = null;
             _driveFlow.ClearItems();
         }
 
@@ -1003,18 +1110,88 @@ namespace DiskFill.UI
                 return;
             }
 
-            SelectDrive(sender as DriveCard);
+            ToggleDriveSelection(sender as DriveCard);
         }
 
-        private void SelectDrive(DriveCard card)
+        private void ToggleDriveSelection(DriveCard card)
         {
-            foreach (var driveCard in _driveCards)
+            if (card == null)
             {
-                driveCard.Selected = driveCard == card;
+                return;
             }
 
-            _selectedDrive = card == null ? null : card.Drive;
-            _selectedInspection = card == null ? null : card.Inspection;
+            if (!card.IsSelectable)
+            {
+                _footerStatusLabel.Text = card.Inspection != null && card.Inspection.HasIssue
+                    ? card.Inspection.Message
+                    : card.Drive.IneligibleReason;
+                return;
+            }
+
+            if (_selectedCards.Contains(card))
+            {
+                _selectedCards.Remove(card);
+                SetSelectedCards(_selectedCards);
+                return;
+            }
+
+            var selectedDrives = _selectedCards.Select(selectedCard => selectedCard.Drive).ToList();
+            if (!PhysicalDiskSelectionGuard.CanAdd(
+                selectedDrives,
+                card.Drive,
+                out string reason))
+            {
+                MessageBox.Show(
+                    this,
+                    reason,
+                    "不能并行写入",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            _selectedCards.Add(card);
+            SetSelectedCards(_selectedCards);
+        }
+
+        private void SetSelectedCards(IEnumerable<DriveCard> cards)
+        {
+            var nextSelection = cards == null
+                ? new List<DriveCard>()
+                : cards.Where(card => card != null && !card.IsDisposed).Distinct().ToList();
+            var validSelection = new List<DriveCard>();
+            foreach (var candidate in nextSelection)
+            {
+                if (!PhysicalDiskSelectionGuard.CanAdd(
+                    validSelection.Select(card => card.Drive).ToList(),
+                    candidate.Drive,
+                    out _))
+                {
+                    continue;
+                }
+
+                validSelection.Add(candidate);
+            }
+
+            _selectedCards.Clear();
+            _selectedCards.AddRange(validSelection);
+
+            for (var index = 0; index < _driveCards.Count; index++)
+            {
+                var driveCard = _driveCards[index];
+                var selectionIndex = _selectedCards.IndexOf(driveCard);
+                driveCard.Selected = selectionIndex >= 0;
+                driveCard.SelectionIndex = selectionIndex >= 0 ? selectionIndex + 1 : 0;
+            }
+
+            var primary = _selectedCards.FirstOrDefault();
+            _selectedDrive = primary == null ? null : primary.Drive;
+            _selectedInspection = primary == null ? null : primary.Inspection;
+            _driveCountLabel.Text = _selectedCards.Count == 0
+                ? _driveCards.Count + " 块本地磁盘 · "
+                    + _driveCards.Count(card => card.IsSelectable) + " 块可写入"
+                : _driveCards.Count + " 块本地磁盘 · 已选 "
+                    + _selectedCards.Count + " 块";
             UpdateSidePanelForSelection();
         }
 
@@ -1037,6 +1214,12 @@ namespace DiskFill.UI
                 return;
             }
 
+            if (_selectedCards.Count > 1)
+            {
+                UpdateMultiSelectionPanel();
+                return;
+            }
+
             _selectedDriveLabel.Text = _selectedDrive.DisplayName + "  " + _selectedDrive.Label;
             _selectedMetaLabel.Text = _selectedDrive.FileSystem + "  ·  "
                 + ByteFormatter.Format(_selectedDrive.TotalBytes) + "  ·  "
@@ -1045,7 +1228,8 @@ namespace DiskFill.UI
             _formatDetailValue.Text = _selectedDrive.FileSystem + "  ·  "
                 + ByteFormatter.Format(_selectedDrive.TotalBytes);
             _freeDetailValue.Text = ByteFormatter.Format(_selectedDrive.AvailableBytes);
-            _mediaDetailValue.Text = _selectedDrive.MediaDescription;
+            _mediaDetailValue.Text = _selectedDrive.MediaDescription
+                + " · " + _selectedDrive.PhysicalDiskDescription;
 
             var job = _selectedInspection == null ? null : _selectedInspection.Job;
             var hasIssue = _selectedInspection != null && _selectedInspection.HasIssue;
@@ -1129,6 +1313,147 @@ namespace DiskFill.UI
             _deleteAfterCompletionCheckBox.Enabled = job == null;
         }
 
+        private void UpdateMultiSelectionPanel()
+        {
+            var drives = _selectedCards.Select(card => card.Drive).ToList();
+            var jobs = _selectedCards
+                .Where(card => card.Inspection != null && card.Inspection.HasJob)
+                .Select(card => card.Inspection.Job)
+                .ToList();
+            var hasIssue = _selectedCards.Any(card => card.Inspection != null && card.Inspection.HasIssue);
+            var hasCompleted = jobs.Any(job => job.State == FillJobState.Completed);
+            var hasIncompleteJob = jobs.Any(job => job.State != FillJobState.Completed);
+            var hasNewDrive = _selectedCards.Any(card => card.Inspection == null || !card.Inspection.HasJob);
+
+            _selectedDriveLabel.Text = drives.Count + " 块磁盘";
+            _selectedMetaLabel.Text = string.Join("、", drives.Select(drive => drive.DisplayName))
+                + " · " + GetMediaSummary(drives);
+            _targetDetailValue.Text = string.Join(" / ", drives.Select(drive => drive.DisplayName));
+            _formatDetailValue.Text = drives.Count + " 个卷 · "
+                + ByteFormatter.Format(drives.Sum(drive => drive.TotalBytes));
+            _freeDetailValue.Text = ByteFormatter.Format(drives.Sum(drive => drive.AvailableBytes));
+            _mediaDetailValue.Text = GetMediaSummary(drives);
+
+            var modeJob = jobs.FirstOrDefault();
+            _suppressModeChange = true;
+            _selectedMode = modeJob == null ? _selectedMode : modeJob.Mode;
+            _modeSelector.SelectedMode = _selectedMode;
+            _suppressModeChange = false;
+            UpdateModeDescription();
+            _modeSelector.Enabled = jobs.Count == 0;
+            _deleteAfterCompletionCheckBox.Enabled = jobs.Count == 0;
+
+            if (hasIssue)
+            {
+                _sidePill.Text = "需检查";
+                _sidePill.Tone = PillTone.Danger;
+                _sideNotice.Tone = PillTone.Danger;
+                _sideNotice.Text = _selectedCards
+                    .First(card => card.Inspection != null && card.Inspection.HasIssue)
+                    .Inspection.Message;
+                _primaryButton.Text = "无法开始";
+                _primaryButton.Glyph = ButtonGlyph.None;
+                _primaryButton.Style = ButtonStyle.Secondary;
+                _primaryButton.Enabled = false;
+                _cleanupButton.Visible = false;
+                return;
+            }
+
+            if (hasCompleted && (hasIncompleteJob || hasNewDrive))
+            {
+                _sidePill.Text = "需调整";
+                _sidePill.Tone = PillTone.Warning;
+                _sideNotice.Tone = PillTone.Warning;
+                _sideNotice.Text = "已完成任务不能与未完成或全新磁盘混合处理。请单独选择已经完成的磁盘进行清理。";
+                _primaryButton.Text = "无法开始";
+                _primaryButton.Glyph = ButtonGlyph.None;
+                _primaryButton.Style = ButtonStyle.Secondary;
+                _primaryButton.Enabled = false;
+                _cleanupButton.Visible = false;
+                return;
+            }
+
+            if (hasCompleted)
+            {
+                _sidePill.Text = "待清理";
+                _sidePill.Tone = PillTone.Accent;
+                _sideNotice.Tone = PillTone.Accent;
+                _sideNotice.Text = "所选磁盘中存在已完成任务。请先删除填充文件，再开始新的并行任务。";
+                _primaryButton.Text = "删除填充文件";
+                _primaryButton.Glyph = ButtonGlyph.Delete;
+                _primaryButton.Style = ButtonStyle.Secondary;
+                _primaryButton.Enabled = true;
+                _cleanupButton.Visible = false;
+                return;
+            }
+
+            if (hasIncompleteJob && hasNewDrive)
+            {
+                _sidePill.Text = "需调整";
+                _sidePill.Tone = PillTone.Warning;
+                _sideNotice.Tone = PillTone.Warning;
+                _sideNotice.Text = "不能同时选择未完成任务和全新磁盘。请先继续或删除未完成任务。";
+                _primaryButton.Text = "无法开始";
+                _primaryButton.Glyph = ButtonGlyph.None;
+                _primaryButton.Style = ButtonStyle.Secondary;
+                _primaryButton.Enabled = false;
+                _cleanupButton.Visible = true;
+                _cleanupButton.Enabled = true;
+                return;
+            }
+
+            if (hasIncompleteJob)
+            {
+                _sidePill.Text = "可续写";
+                _sidePill.Tone = PillTone.Accent;
+                _sideNotice.Tone = PillTone.Accent;
+                _sideNotice.Text = "将同时继续这些未完成任务，并从各自现有文件末尾顺序追加。";
+                _primaryButton.Text = "继续覆写 " + drives.Count + " 块";
+                _primaryButton.Glyph = ButtonGlyph.Play;
+                _primaryButton.Style = ButtonStyle.Primary;
+                _primaryButton.Enabled = true;
+                _cleanupButton.Visible = true;
+                _cleanupButton.Enabled = true;
+                return;
+            }
+
+            _sidePill.Text = "待开始";
+            _sidePill.Tone = PillTone.Neutral;
+            _sideNotice.Tone = PillTone.Warning;
+            _sideNotice.Text = "将在 " + drives.Count
+                + " 块不同物理磁盘上并行顺序写入。每块磁盘独立推进，互不等待。";
+            _primaryButton.Text = "开始覆写 " + drives.Count + " 块";
+            _primaryButton.Glyph = ButtonGlyph.Play;
+            _primaryButton.Style = ButtonStyle.Primary;
+            _primaryButton.Enabled = true;
+            _cleanupButton.Visible = false;
+        }
+
+        private static string GetMediaSummary(IReadOnlyList<DriveTarget> drives)
+        {
+            if (drives.All(drive => drive.MediaKind == MediaKind.Rotational))
+            {
+                return "机械硬盘 ×" + drives.Count;
+            }
+
+            if (drives.All(drive => drive.MediaKind == MediaKind.Unknown))
+            {
+                return "介质未知 ×" + drives.Count;
+            }
+
+            return "混合介质";
+        }
+
+        private static string FormatVolumeNames(IReadOnlyList<FillJob> jobs)
+        {
+            var names = jobs
+                .Select(job => job.VolumeRoot.TrimEnd('\\'))
+                .ToList();
+            return names.Count <= 3
+                ? string.Join("、", names)
+                : string.Join("、", names.Take(3)) + " 等 " + names.Count + " 块";
+        }
+
         private void OnModeChanged(object sender, EventArgs e)
         {
             if (_suppressModeChange)
@@ -1158,21 +1483,23 @@ namespace DiskFill.UI
                     await ResumeOrContinueAsync();
                     break;
                 case ScreenState.Completed:
-                    await DeleteActiveJobAsync(false);
+                    await DeleteCurrentJobsAsync(false);
                     break;
                 case ScreenState.Failed:
                     await ResumeOrContinueAsync();
                     break;
                 default:
-                    var existingJob = _selectedInspection == null ? null : _selectedInspection.Job;
-                    if (existingJob != null && existingJob.State == FillJobState.Completed)
+                    var hasCompletedSelectedJob = _selectedCards.Any(card =>
+                        card.Inspection != null
+                        && card.Inspection.HasJob
+                        && card.Inspection.Job.State == FillJobState.Completed);
+                    if (hasCompletedSelectedJob)
                     {
-                        _activeJob = existingJob;
-                        await DeleteActiveJobAsync(false);
+                        await DeleteSelectedJobsAsync(false);
                     }
                     else
                     {
-                        await StartSelectedJobAsync();
+                        await StartSelectedJobsAsync();
                     }
 
                     break;
@@ -1196,47 +1523,57 @@ namespace DiskFill.UI
             await ReturnToDriveListAsync();
         }
 
-        private async Task StartSelectedJobAsync()
+        private async Task StartSelectedJobsAsync()
         {
-            if (_selectedDrive == null || _isBusy)
+            if (_selectedCards.Count == 0 || _isBusy)
             {
                 return;
             }
 
-            if (_selectedInspection != null && _selectedInspection.HasIssue)
+            var cards = _selectedCards.ToList();
+            var issueCard = cards.FirstOrDefault(
+                card => card.Inspection != null && card.Inspection.HasIssue);
+            if (issueCard != null)
             {
                 MessageBox.Show(
                     this,
-                    _selectedInspection.Message,
+                    issueCard.Inspection.Message,
                     "任务需要检查",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
                 return;
             }
 
-            if (_selectedInspection != null && _selectedInspection.HasJob)
+            var existingJobs = cards
+                .Where(card => card.Inspection != null && card.Inspection.HasJob)
+                .Select(card => card.Inspection.Job)
+                .ToList();
+            var hasNewDrive = cards.Any(card => card.Inspection == null || !card.Inspection.HasJob);
+            if (existingJobs.Count > 0 && hasNewDrive)
             {
-                var job = _selectedInspection.Job;
-                if (!await ValidateDriveBeforeResumeAsync(job))
-                {
-                    await RefreshDrivesAsync(null);
-                    return;
-                }
-
-                await StartFillAsync(job);
+                MessageBox.Show(
+                    this,
+                    "未完成任务和全新磁盘不能混合启动。请先继续或删除未完成任务。",
+                    "DiskFill",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
                 return;
             }
 
-            if (!_selectedDrive.IsEligible)
+            var drives = cards.Select(card => card.Drive).ToList();
+            if (existingJobs.Count == 0 && drives.Any(drive => !drive.IsEligible))
             {
                 return;
             }
 
-            using (var dialog = new ConfirmFillDialog(_selectedDrive))
+            if (existingJobs.Count == 0)
             {
-                if (dialog.ShowDialog(this) != DialogResult.OK)
+                using (var dialog = new ConfirmFillDialog(drives))
                 {
-                    return;
+                    if (dialog.ShowDialog(this) != DialogResult.OK)
+                    {
+                        return;
+                    }
                 }
             }
 
@@ -1245,13 +1582,10 @@ namespace DiskFill.UI
             _cleanupButton.Enabled = false;
             try
             {
-                var freshDrive = await Task.Run(() => _driveService.Refresh(_selectedDrive.RootPath));
-                if (freshDrive == null
-                    || !freshDrive.IsEligible
-                    || !string.Equals(
-                        freshDrive.VolumeSerial,
-                        _selectedDrive.VolumeSerial,
-                        StringComparison.OrdinalIgnoreCase))
+                var freshDrives = await Task.Run(() => drives
+                    .Select(drive => _driveService.Refresh(drive.RootPath))
+                    .ToList());
+                if (freshDrives.Any(drive => drive == null))
                 {
                     MessageBox.Show(
                         this,
@@ -1262,21 +1596,107 @@ namespace DiskFill.UI
                     return;
                 }
 
-                if (freshDrive.AvailableBytes < 64L * 1024 * 1024)
+                var validatedPhysicalDisks = new List<DriveTarget>();
+                foreach (var freshDrive in freshDrives)
+                {
+                    if (!PhysicalDiskSelectionGuard.CanAdd(
+                        validatedPhysicalDisks,
+                        freshDrive,
+                        out string reason))
+                    {
+                        MessageBox.Show(
+                            this,
+                            reason,
+                            "磁盘映射已变化",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    validatedPhysicalDisks.Add(freshDrive);
+                }
+
+                for (var index = 0; index < drives.Count; index++)
+                {
+                    if (!string.Equals(
+                            drives[index].VolumeSerial,
+                            freshDrives[index].VolumeSerial,
+                            StringComparison.OrdinalIgnoreCase)
+                        || drives[index].TotalBytes != freshDrives[index].TotalBytes)
+                    {
+                        MessageBox.Show(
+                            this,
+                            "至少一块磁盘的卷序列号或容量已经变化。请刷新后重新选择。",
+                            "DiskFill",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
+                        return;
+                    }
+                }
+
+                if (existingJobs.Count > 0)
+                {
+                    for (var index = 0; index < existingJobs.Count; index++)
+                    {
+                        if (!existingJobs[index].IsCompatibleWith(freshDrives[index]))
+                        {
+                            MessageBox.Show(
+                                this,
+                                "目标卷的序列号或容量已经变化。为保护数据，任务不会继续。",
+                                "磁盘身份已变化",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Warning);
+                            return;
+                        }
+                    }
+
+                    _isBusy = false;
+                    await RunJobsAsync(existingJobs);
+                    return;
+                }
+
+                if (freshDrives.Any(drive =>
+                    !drive.IsEligible || drive.AvailableBytes < 64L * 1024 * 1024))
                 {
                     MessageBox.Show(
                         this,
-                        "该磁盘当前可用空间不足 64 MB，无法开始任务。",
+                        "至少一块磁盘当前不满足写入条件或可用空间不足 64 MB。",
                         "DiskFill",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Warning);
                     return;
                 }
 
-                var job = await Task.Run(() => _jobStore.CreateNew(freshDrive, _selectedMode));
-                _selectedDrive = freshDrive;
-                _selectedInspection = new JobInspection { Job = job };
-                await StartFillAsync(job);
+                var createdJobs = new List<FillJob>();
+                try
+                {
+                    foreach (var freshDrive in freshDrives)
+                    {
+                        createdJobs.Add(await Task.Run(
+                            () => _jobStore.CreateNew(freshDrive, _selectedMode)));
+                    }
+                }
+                catch
+                {
+                    foreach (var createdJob in createdJobs)
+                    {
+                        try
+                        {
+                            _jobStore.DeleteJob(createdJob);
+                        }
+                        catch (Exception cleanupException)
+                        {
+                            AppLog.Warn(
+                                "Could not roll back a partially created batch job.",
+                                cleanupException);
+                        }
+                    }
+
+                    throw;
+                }
+
+                _isBusy = false;
+                await RunJobsAsync(createdJobs);
             }
             catch (Exception exception)
             {
@@ -1298,46 +1718,59 @@ namespace DiskFill.UI
             }
         }
 
-        private async Task StartFillAsync(FillJob job)
+        private async Task RunJobsAsync(IReadOnlyList<FillJob> jobs)
         {
-            if (job == null || _isEngineActive)
+            if (jobs == null || jobs.Count == 0 || _isEngineActive)
             {
                 return;
             }
 
-            _activeJob = job;
-            _selectedMode = job.Mode;
+            CleanupRunObjects();
+            _runSessions.Clear();
+            foreach (var job in jobs)
+            {
+                _runSessions.Add(new RunSession(job));
+            }
+
+            _selectedMode = jobs[0].Mode;
             _runCancellation = new CancellationTokenSource();
-            _pauseController = new PauseController();
+            _runStopwatch = Stopwatch.StartNew();
             _screenState = ScreenState.Running;
             _isEngineActive = true;
             BeginExecutionState();
             ShowRunView();
-            ApplyRunningState(job);
+            InitializeRunProgressCards();
+            ApplyRunningState(_runSessions);
 
-            var progress = new Progress<FillProgress>(OnFillProgress);
-            FillResult result;
+            var tasks = new List<Task<FillResult>>();
+            foreach (var session in _runSessions)
+            {
+                var runSession = session;
+                var progress = new Progress<FillProgress>(
+                    value => OnFillProgress(runSession, value));
+                tasks.Add(RunSessionAsync(runSession, progress, _runCancellation.Token));
+            }
+
+            FillResult[] results;
             try
             {
-                result = await _fillEngine.RunAsync(
-                    job,
-                    progress,
-                    _pauseController,
-                    _runCancellation.Token);
+                results = await Task.WhenAll(tasks);
             }
             catch (Exception exception)
             {
-                AppLog.Error("The fill engine ended unexpectedly.", exception);
-                result = new FillResult
+                AppLog.Error("The batch fill operation ended unexpectedly.", exception);
+                results = _runSessions.Select(session => new FillResult
                 {
                     CompletionKind = FillCompletionKind.Failed,
-                    WrittenBytes = _jobStore.GetWrittenBytes(job),
+                    WrittenBytes = _jobStore.GetWrittenBytes(session.Job),
                     ErrorMessage = exception.Message
-                };
+                }).ToArray();
             }
 
             EndExecutionState();
             _isEngineActive = false;
+            CleanupRunObjects();
+            var result = BuildBatchResult(_runSessions, results);
             _screenState = result.IsSuccess
                 ? ScreenState.Completed
                 : (result.CompletionKind == FillCompletionKind.Cancelled
@@ -1349,7 +1782,7 @@ namespace DiskFill.UI
                 ShowCompletedState(result);
                 if (_deleteAfterCompletion)
                 {
-                    await DeleteActiveJobAsync(true);
+                    await DeleteCurrentJobsAsync(true);
                 }
             }
             else if (result.CompletionKind == FillCompletionKind.Cancelled)
@@ -1361,7 +1794,6 @@ namespace DiskFill.UI
                 ShowFailedState(result);
             }
 
-            CleanupRunObjects();
             if (_closeAfterStop)
             {
                 _closeAfterStop = false;
@@ -1369,81 +1801,122 @@ namespace DiskFill.UI
             }
         }
 
-        private async Task<bool> ValidateDriveBeforeResumeAsync(FillJob job)
+        private async Task<FillResult> RunSessionAsync(
+            RunSession session,
+            IProgress<FillProgress> progress,
+            CancellationToken cancellationToken)
         {
-            if (job == null || _selectedDrive == null || _isBusy)
-            {
-                return false;
-            }
-
-            _isBusy = true;
-            _primaryButton.Enabled = false;
+            FillResult result;
             try
             {
-                var expectedRoot = _selectedDrive.RootPath;
-                var freshDrive = await Task.Run(() => _driveService.Refresh(expectedRoot));
-                if (freshDrive == null || !job.IsCompatibleWith(freshDrive))
-                {
-                    MessageBox.Show(
-                        this,
-                        "目标卷的序列号或容量已经变化。为保护数据，任务不会继续。",
-                        "磁盘身份已变化",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning);
-                    return false;
-                }
-
-                _selectedDrive = freshDrive;
-                return true;
+                result = await _fillEngine.RunAsync(
+                    session.Job,
+                    progress,
+                    session.PauseController,
+                    cancellationToken);
             }
             catch (Exception exception)
             {
-                AppLog.Error("Could not validate the target drive before resume.", exception);
-                MessageBox.Show(
-                    this,
-                    "无法重新验证目标磁盘：\r\n" + exception.Message,
-                    "DiskFill",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
-                return false;
+                AppLog.Error(
+                    "The fill engine ended unexpectedly for " + session.Job.VolumeRoot + ".",
+                    exception);
+                result = new FillResult
+                {
+                    CompletionKind = FillCompletionKind.Failed,
+                    WrittenBytes = _jobStore.GetWrittenBytes(session.Job),
+                    Elapsed = _runStopwatch == null ? TimeSpan.Zero : _runStopwatch.Elapsed,
+                    ErrorMessage = exception.Message
+                };
             }
             finally
             {
-                _isBusy = false;
-                if (_screenState == ScreenState.Idle)
-                {
-                    UpdateSidePanelForSelection();
-                }
+                session.IsFinished = true;
             }
+
+            session.Result = result;
+            UpdateAggregateProgress();
+            return result;
         }
 
-        private void ApplyRunningState(FillJob job)
+        private static FillResult BuildBatchResult(
+            IReadOnlyList<RunSession> sessions,
+            IReadOnlyList<FillResult> results)
         {
+            var failures = results
+                .Select((result, index) => new { Result = result, Session = sessions[index] })
+                .Where(item => item.Result.CompletionKind == FillCompletionKind.Failed)
+                .ToList();
+            var completionKind = failures.Count > 0
+                ? FillCompletionKind.Failed
+                : (results.All(result => result.CompletionKind == FillCompletionKind.Filled)
+                    ? FillCompletionKind.Filled
+                    : FillCompletionKind.Cancelled);
+            return new FillResult
+            {
+                CompletionKind = completionKind,
+                WrittenBytes = results.Sum(result => result.WrittenBytes),
+                Elapsed = results.Count == 0
+                    ? TimeSpan.Zero
+                    : results.Max(result => result.Elapsed),
+                ReachedDiskCapacity = results.All(result => result.ReachedDiskCapacity),
+                ErrorMessage = failures.Count == 0
+                    ? null
+                    : string.Join(
+                        Environment.NewLine,
+                        failures.Select(item =>
+                            item.Session.Job.VolumeRoot + " "
+                            + (item.Result.ErrorMessage ?? "写入失败")))
+            };
+        }
+
+        private void ApplyRunningState(IReadOnlyList<RunSession> sessions)
+        {
+            var jobs = sessions.Select(session => session.Job).ToList();
+            var driveCount = jobs.Count;
+            var totalPlannedBytes = jobs.Sum(job => job.PlannedBytes);
+            var totalWrittenBytes = jobs.Sum(job => job.WrittenBytes);
+            var volumeNames = FormatVolumeNames(jobs);
+            var isMultiDrive = driveCount > 1;
+            _singleProgressView.Visible = !isMultiDrive;
+            _multiProgressView.Visible = isMultiDrive;
+            _capacityStartLabel.Text = isMultiDrive ? "总进度" : "目标空间";
             _idleView.Visible = false;
             _runView.Visible = true;
             _runView.BringToFront();
-            _runTitleLabel.Text = "正在覆写 " + job.VolumeRoot;
-            _runSubtitleLabel.Text = "顺序写入中 · "
-                + (job.Mode == OverwriteMode.FastNonZero ? "非零填充" : "全零填充")
-                + " · " + ByteFormatter.Format(job.PlannedBytes) + " 计划写入量";
+            _runTitleLabel.Text = driveCount > 1
+                ? "正在同时覆写 " + driveCount + " 块磁盘"
+                : "正在覆写 " + jobs[0].VolumeRoot;
+            _runSubtitleLabel.Text = volumeNames + " · "
+                + (jobs.All(job => job.Mode == OverwriteMode.FastNonZero)
+                    ? "非零填充"
+                    : (jobs.All(job => job.Mode == OverwriteMode.Zero) ? "全零填充" : "混合模式"))
+                + " · " + ByteFormatter.Format(totalPlannedBytes) + " 计划写入量";
             _runPill.Text = "运行中";
             _runPill.Tone = PillTone.Accent;
             _ringProgress.ProgressColor = AppTheme.Accent;
-            _ringProgress.Value = job.PlannedBytes <= 0
+            _ringProgress.Value = totalPlannedBytes <= 0
                 ? 0
-                : (double)job.WrittenBytes / job.PlannedBytes;
+                : (double)totalWrittenBytes / totalPlannedBytes;
             _capacityBar.ProgressColor = AppTheme.Accent;
             _capacityBar.Value = _ringProgress.Value;
-            _capacityEndLabel.Text = ByteFormatter.Format(job.PlannedBytes);
-            _writtenMetric.Value = ByteFormatter.Format(job.WrittenBytes);
-            _writtenMetric.Note = "计划 " + ByteFormatter.Format(job.PlannedBytes);
-            _speedMetric.Caption = "持续速度";
+            _capacityEndLabel.Text = ByteFormatter.Format(totalPlannedBytes);
+            _writtenMetric.Value = ByteFormatter.Format(totalWrittenBytes);
+            _writtenMetric.Note = "计划 " + ByteFormatter.Format(totalPlannedBytes);
+            _speedMetric.Caption = isMultiDrive ? "合计速度" : "持续速度";
             _speedMetric.Value = "--";
-            _speedMetric.Note = "最近 15 秒平均";
+            _speedMetric.Note = isMultiDrive
+                ? driveCount + " 块磁盘 · 15 秒平均"
+                : "最近 15 秒平均";
             _elapsedMetric.Value = "00:00";
             _elapsedMetric.Note = "本机计时";
             _etaMetric.Value = "--";
-            _etaMetric.Note = "按持续速度估算";
+            _etaMetric.Note = isMultiDrive ? "按最慢磁盘估算" : "按持续速度估算";
+            _multiWrittenMetric.Value = ByteFormatter.Format(totalWrittenBytes);
+            _multiWrittenMetric.Note = "计划 " + ByteFormatter.Format(totalPlannedBytes);
+            _multiSpeedMetric.Value = "--";
+            _multiSpeedMetric.Note = "活动磁盘速度合计";
+            _multiEtaMetric.Value = "--";
+            _multiEtaMetric.Note = "按最慢磁盘估算";
             _pauseButton.Text = "暂停写入";
             _pauseButton.Glyph = ButtonGlyph.Pause;
             _pauseButton.Enabled = true;
@@ -1461,7 +1934,12 @@ namespace DiskFill.UI
             _primaryButton.Enabled = true;
             _cleanupButton.Visible = false;
             _sideNotice.Tone = PillTone.Accent;
-            _sideNotice.Text = "任务运行时会阻止系统自动睡眠。请保持磁盘供电稳定，不要强制断电。";
+            _sideNotice.Text = driveCount > 1
+                ? "多块物理磁盘正在并行顺序写入。任务运行时会阻止系统自动睡眠，请保持所有磁盘供电稳定。"
+                : "任务运行时会阻止系统自动睡眠。请保持磁盘供电稳定，不要强制断电。";
+            _footerStatusLabel.Text = driveCount > 1
+                ? "正在并行覆写 " + driveCount + " 块磁盘"
+                : "正在覆写 " + jobs[0].VolumeRoot.TrimEnd('\\');
         }
 
         private void ShowRunView()
@@ -1471,77 +1949,217 @@ namespace DiskFill.UI
             _runView.BringToFront();
         }
 
-        private void OnFillProgress(FillProgress progress)
+        private void OnFillProgress(RunSession session, FillProgress progress)
         {
-            if (progress == null || _activeJob == null)
+            if (progress == null || session == null)
             {
                 return;
             }
 
-            _activeJob.WrittenBytes = progress.WrittenBytes;
-            var fraction = Math.Max(0, Math.Min(1, progress.Fraction));
+            session.LatestProgress = progress;
+            session.Job.WrittenBytes = progress.WrittenBytes;
+            UpdateAggregateProgress();
+        }
+
+        private void InitializeRunProgressCards()
+        {
+            _runProgressCards.Clear();
+            _runProgressList.ClearItems();
+            if (_runSessions.Count <= 1)
+            {
+                return;
+            }
+
+            for (var index = 0; index < _runSessions.Count; index++)
+            {
+                var session = _runSessions[index];
+                var selectedCard = _selectedCards.FirstOrDefault(selected =>
+                    string.Equals(
+                        selected.Drive.RootPath,
+                        session.Job.VolumeRoot,
+                        StringComparison.OrdinalIgnoreCase));
+                var physicalDescription = selectedCard == null
+                    ? (session.Job.PhysicalDiskNumber.HasValue
+                        ? "物理磁盘 #" + session.Job.PhysicalDiskNumber.Value
+                        : "物理磁盘未知")
+                    : selectedCard.Drive.PhysicalDiskDescription;
+                var card = new DriveProgressCard(
+                    index + 1,
+                    session.Job,
+                    physicalDescription);
+                _runProgressCards.Add(card);
+                _runProgressList.Controls.Add(card);
+            }
+
+            UpdateRunProgressCards();
+            _runProgressList.RelayoutItems();
+        }
+
+        private void UpdateRunProgressCards()
+        {
+            foreach (var card in _runProgressCards)
+            {
+                var session = _runSessions.FirstOrDefault(candidate =>
+                    string.Equals(
+                        candidate.Job.JobId,
+                        card.Job.JobId,
+                        StringComparison.OrdinalIgnoreCase));
+                if (session == null)
+                {
+                    continue;
+                }
+
+                var progress = session.LatestProgress;
+                var writtenBytes = progress == null
+                    ? session.Job.WrittenBytes
+                    : progress.WrittenBytes;
+                var bytesPerSecond = session.IsFinished || progress == null
+                    ? 0
+                    : progress.BytesPerSecond;
+                double? remainingSeconds = bytesPerSecond > 0
+                    && writtenBytes < session.Job.PlannedBytes
+                        ? (session.Job.PlannedBytes - writtenBytes) / bytesPerSecond
+                        : (double?)null;
+                card.UpdateProgress(
+                    writtenBytes,
+                    bytesPerSecond,
+                    remainingSeconds,
+                    GetDriveRunState(session));
+            }
+        }
+
+        private DriveRunState GetDriveRunState(RunSession session)
+        {
+            if (session.Result != null)
+            {
+                if (session.Result.IsSuccess)
+                {
+                    return DriveRunState.Completed;
+                }
+
+                return session.Result.CompletionKind == FillCompletionKind.Cancelled
+                    ? DriveRunState.Paused
+                    : DriveRunState.Failed;
+            }
+
+            return _screenState == ScreenState.Paused
+                ? DriveRunState.Paused
+                : DriveRunState.Running;
+        }
+
+        private void UpdateAggregateProgress()
+        {
+            if (_runSessions.Count == 0)
+            {
+                return;
+            }
+
+            var totalPlannedBytes = _runSessions.Sum(session => session.Job.PlannedBytes);
+            var totalWrittenBytes = _runSessions.Sum(session =>
+                session.LatestProgress == null
+                    ? session.Job.WrittenBytes
+                    : session.LatestProgress.WrittenBytes);
+            var fraction = totalPlannedBytes <= 0
+                ? 0
+                : Math.Max(0, Math.Min(1, (double)totalWrittenBytes / totalPlannedBytes));
             _ringProgress.Value = fraction;
             _capacityBar.Value = fraction;
-            _writtenMetric.Value = ByteFormatter.Format(progress.WrittenBytes);
-            _writtenMetric.Note = "计划 " + ByteFormatter.Format(progress.TotalBytes);
-            _speedMetric.Value = ByteFormatter.FormatRate(progress.BytesPerSecond);
-            _speedMetric.Note = "最近 15 秒平均";
-            var elapsed = TimeSpan.FromSeconds(progress.ElapsedSeconds);
+            _writtenMetric.Value = ByteFormatter.Format(totalWrittenBytes);
+            _writtenMetric.Note = "计划 " + ByteFormatter.Format(totalPlannedBytes);
+            var aggregateSpeed = _runSessions
+                .Where(session => !session.IsFinished && session.LatestProgress != null)
+                .Sum(session => session.LatestProgress.BytesPerSecond);
+            _speedMetric.Caption = _runSessions.Count > 1 ? "合计速度" : "持续速度";
+            _speedMetric.Value = ByteFormatter.FormatRate(aggregateSpeed);
+            _speedMetric.Note = _runSessions.Count > 1
+                ? _runSessions.Count + " 块磁盘 · 15 秒平均"
+                : "最近 15 秒平均";
+            _multiWrittenMetric.Value = ByteFormatter.Format(totalWrittenBytes);
+            _multiWrittenMetric.Note = "计划 " + ByteFormatter.Format(totalPlannedBytes);
+            _multiSpeedMetric.Value = ByteFormatter.FormatRate(aggregateSpeed);
+            _multiSpeedMetric.Note = "活动磁盘速度合计";
+            var elapsed = _runStopwatch == null
+                ? TimeSpan.Zero
+                : _runStopwatch.Elapsed;
             _elapsedMetric.Value = TimeFormatter.FormatElapsed(elapsed);
             _elapsedMetric.Note = "本次任务";
-            _capacityEndLabel.Text = ByteFormatter.Format(progress.WrittenBytes)
-                + " / " + ByteFormatter.Format(progress.TotalBytes);
+            _capacityEndLabel.Text = ByteFormatter.Format(totalWrittenBytes)
+                + " / " + ByteFormatter.Format(totalPlannedBytes);
 
-            if (progress.BytesPerSecond > 0 && progress.WrittenBytes < progress.TotalBytes)
+            var etaCandidates = _runSessions
+                .Where(session =>
+                    !session.IsFinished
+                    && session.LatestProgress != null
+                    && session.LatestProgress.BytesPerSecond > 0
+                    && session.LatestProgress.WrittenBytes < session.Job.PlannedBytes)
+                .Select(session =>
+                    (session.Job.PlannedBytes - session.LatestProgress.WrittenBytes)
+                    / session.LatestProgress.BytesPerSecond)
+                .ToList();
+            if (etaCandidates.Count > 0)
             {
-                var remainingSeconds = (progress.TotalBytes - progress.WrittenBytes)
-                    / progress.BytesPerSecond;
+                var remainingSeconds = etaCandidates.Max();
                 _etaMetric.Value = TimeFormatter.FormatEta(TimeSpan.FromSeconds(remainingSeconds));
+                _multiEtaMetric.Value = _etaMetric.Value;
             }
             else
             {
                 _etaMetric.Value = "--";
+                _multiEtaMetric.Value = "--";
             }
+
+            UpdateRunProgressCards();
         }
 
         private void PauseOperation()
         {
-            if (_screenState != ScreenState.Running || _pauseController == null)
+            if (_screenState != ScreenState.Running || _runSessions.Count == 0)
             {
                 return;
             }
 
-            _pauseController.Pause();
+            foreach (var session in _runSessions)
+            {
+                session.PauseController.Pause();
+                session.Job.State = FillJobState.Paused;
+            }
+
             EndExecutionState();
             _screenState = ScreenState.Paused;
-            if (_activeJob != null)
+            var jobs = _runSessions.Select(session => session.Job).ToList();
+            Task.Run(() =>
             {
-                _activeJob.State = FillJobState.Paused;
-                var job = _activeJob;
-                Task.Run(() => _jobStore.SaveQuietly(job));
-            }
+                foreach (var job in jobs)
+                {
+                    _jobStore.SaveQuietly(job);
+                }
+            });
 
             ShowPausedState();
         }
 
         private async Task ResumeOrContinueAsync()
         {
-            if (_activeJob == null)
+            if (_runSessions.Count == 0)
             {
                 return;
             }
 
-            if (_screenState == ScreenState.Paused && _isEngineActive && _pauseController != null)
+            if (_screenState == ScreenState.Paused && _isEngineActive)
             {
-                _pauseController.Resume();
+                foreach (var session in _runSessions)
+                {
+                    session.PauseController.Resume();
+                    session.Job.State = FillJobState.Running;
+                }
+
                 BeginExecutionState();
-                _activeJob.State = FillJobState.Running;
                 _screenState = ScreenState.Running;
-                ApplyRunningState(_activeJob);
+                ApplyRunningState(_runSessions);
                 return;
             }
 
-            await StartFillAsync(_activeJob);
+            await RunJobsAsync(_runSessions.Select(session => session.Job).ToList());
         }
 
         private async Task StopOperationAsync()
@@ -1553,7 +2171,9 @@ namespace DiskFill.UI
 
             var answer = MessageBox.Show(
                 this,
-                "停止当前任务并保留已写入的填充文件？\r\n\r\n之后可以从磁盘列表继续写入。",
+                _runSessions.Count > 1
+                    ? "停止全部并行任务并保留已写入的填充文件？\r\n\r\n之后可以再次选择这些磁盘继续写入。"
+                    : "停止当前任务并保留已写入的填充文件？\r\n\r\n之后可以从磁盘列表继续写入。",
                 "停止覆写",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question,
@@ -1566,9 +2186,9 @@ namespace DiskFill.UI
             _stopButton.Enabled = false;
             _pauseButton.Enabled = false;
             _primaryButton.Enabled = false;
-            if (_pauseController != null)
+            foreach (var session in _runSessions)
             {
-                _pauseController.Resume();
+                session.PauseController.Resume();
             }
 
             _runCancellation.Cancel();
@@ -1579,8 +2199,13 @@ namespace DiskFill.UI
             _screenState = ScreenState.Paused;
             _runView.Visible = true;
             _idleView.Visible = false;
-            _runTitleLabel.Text = "任务已暂停";
-            _runSubtitleLabel.Text = "已写入进度已经保留，继续后会从当前文件末尾追加。";
+            var driveCount = _runSessions.Count;
+            _runTitleLabel.Text = driveCount > 1
+                ? driveCount + " 块磁盘任务已暂停"
+                : "任务已暂停";
+            _runSubtitleLabel.Text = _runSessions.Count > 1
+                ? "所有磁盘的写入进度均已保留，继续后会从各自文件末尾追加。"
+                : "已写入进度已经保留，继续后会从当前文件末尾追加。";
             _runPill.Text = "已暂停";
             _runPill.Tone = PillTone.Warning;
             _ringProgress.ProgressColor = AppTheme.Warning;
@@ -1588,7 +2213,7 @@ namespace DiskFill.UI
             _pauseButton.Text = "继续写入";
             _pauseButton.Glyph = ButtonGlyph.Play;
             _pauseButton.Style = ButtonStyle.Primary;
-            _pauseButton.Enabled = _activeJob != null;
+            _pauseButton.Enabled = _runSessions.Count > 0;
             _stopButton.Text = _isEngineActive ? "停止并保留" : "返回磁盘列表";
             _stopButton.Glyph = _isEngineActive ? ButtonGlyph.Stop : ButtonGlyph.None;
             _stopButton.Enabled = true;
@@ -1600,14 +2225,17 @@ namespace DiskFill.UI
             _primaryButton.Text = "继续写入";
             _primaryButton.Glyph = ButtonGlyph.Play;
             _primaryButton.Style = ButtonStyle.Primary;
-            _primaryButton.Enabled = _activeJob != null;
+            _primaryButton.Enabled = _runSessions.Count > 0;
             _cleanupButton.Text = "删除填充文件";
             _cleanupButton.Glyph = ButtonGlyph.Delete;
-            _cleanupButton.Visible = _activeJob != null && !_isEngineActive;
-            _cleanupButton.Enabled = _activeJob != null && !_isEngineActive;
+            _cleanupButton.Visible = _runSessions.Count > 0 && !_isEngineActive;
+            _cleanupButton.Enabled = _runSessions.Count > 0 && !_isEngineActive;
             _sideNotice.Tone = PillTone.Warning;
-            _sideNotice.Text = "任务处于暂停状态。填充文件不会被删除，可以安全退出程序并在下次继续。";
+            _sideNotice.Text = driveCount > 1
+                ? "全部磁盘任务处于暂停状态。填充文件不会被删除，可以安全退出程序并在下次继续。"
+                : "任务处于暂停状态。填充文件不会被删除，可以安全退出程序并在下次继续。";
             _footerStatusLabel.Text = "任务已暂停 · 进度已保留";
+            UpdateRunProgressCards();
         }
 
         private void ShowCompletedState(FillResult result)
@@ -1615,9 +2243,14 @@ namespace DiskFill.UI
             _screenState = ScreenState.Completed;
             _runView.Visible = true;
             _idleView.Visible = false;
-            _runTitleLabel.Text = "覆写完成";
+            var driveCount = _runSessions.Count;
+            _runTitleLabel.Text = driveCount > 1
+                ? driveCount + " 块磁盘覆写完成"
+                : "覆写完成";
             _runSubtitleLabel.Text = "已顺序写入 " + ByteFormatter.Format(result.WrittenBytes)
-                + "，目标卷可用空间已耗尽。";
+                + (driveCount > 1
+                    ? "，所有目标磁盘可用空间均已耗尽。"
+                    : "，目标卷可用空间已耗尽。");
             _runPill.Text = "已完成";
             _runPill.Tone = PillTone.Accent;
             _ringProgress.Value = 1;
@@ -1640,7 +2273,7 @@ namespace DiskFill.UI
             _pauseButton.Text = "删除填充文件";
             _pauseButton.Glyph = ButtonGlyph.Delete;
             _pauseButton.Style = ButtonStyle.Secondary;
-            _pauseButton.Enabled = _activeJob != null;
+            _pauseButton.Enabled = _runSessions.Count > 0;
             _stopButton.Text = "返回磁盘列表";
             _stopButton.Glyph = ButtonGlyph.None;
             _stopButton.Style = ButtonStyle.Secondary;
@@ -1653,7 +2286,7 @@ namespace DiskFill.UI
             _primaryButton.Text = "删除填充文件";
             _primaryButton.Glyph = ButtonGlyph.Delete;
             _primaryButton.Style = ButtonStyle.Secondary;
-            _primaryButton.Enabled = _activeJob != null;
+            _primaryButton.Enabled = _runSessions.Count > 0;
             _cleanupButton.Text = "返回磁盘列表";
             _cleanupButton.Glyph = ButtonGlyph.None;
             _cleanupButton.Visible = true;
@@ -1662,6 +2295,7 @@ namespace DiskFill.UI
             _sideNotice.Text = "填充文件仍然保留。删除它只会释放空间，不会撤销已经完成的数据簇覆写。";
             _freeDetailValue.Text = "已写满";
             _footerStatusLabel.Text = "覆写完成 · " + ByteFormatter.Format(result.WrittenBytes) + " 已写入";
+            UpdateRunProgressCards();
             AppLog.Info("Fill operation completed in the UI.");
         }
 
@@ -1670,7 +2304,10 @@ namespace DiskFill.UI
             _screenState = ScreenState.Failed;
             _runView.Visible = true;
             _idleView.Visible = false;
-            _runTitleLabel.Text = "任务中断";
+            var driveCount = _runSessions.Count;
+            _runTitleLabel.Text = driveCount > 1
+                ? driveCount + " 块磁盘任务中断"
+                : "任务中断";
             _runSubtitleLabel.Text = string.IsNullOrEmpty(result.ErrorMessage)
                 ? "写入过程遇到错误。"
                 : result.ErrorMessage;
@@ -1683,7 +2320,7 @@ namespace DiskFill.UI
             _pauseButton.Text = "重试续写";
             _pauseButton.Glyph = ButtonGlyph.Play;
             _pauseButton.Style = ButtonStyle.Primary;
-            _pauseButton.Enabled = _activeJob != null;
+            _pauseButton.Enabled = _runSessions.Count > 0;
             _stopButton.Text = "返回磁盘列表";
             _stopButton.Glyph = ButtonGlyph.None;
             _stopButton.Style = ButtonStyle.Secondary;
@@ -1696,14 +2333,15 @@ namespace DiskFill.UI
             _primaryButton.Text = "重试续写";
             _primaryButton.Glyph = ButtonGlyph.Play;
             _primaryButton.Style = ButtonStyle.Primary;
-            _primaryButton.Enabled = _activeJob != null;
+            _primaryButton.Enabled = _runSessions.Count > 0;
             _cleanupButton.Text = "删除填充文件";
             _cleanupButton.Glyph = ButtonGlyph.Delete;
-            _cleanupButton.Visible = _activeJob != null;
-            _cleanupButton.Enabled = _activeJob != null;
+            _cleanupButton.Visible = _runSessions.Count > 0;
+            _cleanupButton.Enabled = _runSessions.Count > 0;
             _sideNotice.Tone = PillTone.Danger;
             _sideNotice.Text = "写入已停止。可以检查磁盘连接、空间或错误日志后重试；已写入进度会保留。";
             _footerStatusLabel.Text = "任务中断 · 可查看日志后重试";
+            UpdateRunProgressCards();
         }
 
         private async void OnCleanupButtonClicked(object sender, EventArgs e)
@@ -1714,7 +2352,13 @@ namespace DiskFill.UI
                 return;
             }
 
-            await DeleteActiveJobAsync(false);
+            if (_runSessions.Count > 0)
+            {
+                await DeleteCurrentJobsAsync(false);
+                return;
+            }
+
+            await DeleteSelectedJobsAsync(false);
         }
 
         private async Task ReturnToDriveListAsync()
@@ -1724,7 +2368,8 @@ namespace DiskFill.UI
                 return;
             }
 
-            _activeJob = null;
+            _runSessions.Clear();
+            _runStopwatch = null;
             _selectedInspection = null;
             _screenState = ScreenState.Idle;
             _runView.Visible = false;
@@ -1736,9 +2381,25 @@ namespace DiskFill.UI
             await RefreshDrivesAsync(_selectedDrive == null ? null : _selectedDrive.RootPath);
         }
 
-        private async Task DeleteActiveJobAsync(bool silent)
+        private async Task DeleteSelectedJobsAsync(bool silent)
         {
-            if (_activeJob == null)
+            var jobs = _selectedCards
+                .Where(card => card.Inspection != null && card.Inspection.HasJob)
+                .Select(card => card.Inspection.Job)
+                .Distinct()
+                .ToList();
+            await DeleteJobsAsync(jobs, silent);
+        }
+
+        private async Task DeleteCurrentJobsAsync(bool silent)
+        {
+            var jobs = _runSessions.Select(session => session.Job).Distinct().ToList();
+            await DeleteJobsAsync(jobs, silent);
+        }
+
+        private async Task DeleteJobsAsync(IReadOnlyList<FillJob> jobs, bool silent)
+        {
+            if (jobs == null || jobs.Count == 0)
             {
                 return;
             }
@@ -1752,7 +2413,8 @@ namespace DiskFill.UI
             {
                 var answer = MessageBox.Show(
                     this,
-                    "删除 DiskFill 创建的全部填充文件并释放空间？\r\n\r\n已完成的文件级覆写不会撤销。",
+                    "删除 " + jobs.Count + " 个任务创建的全部填充文件并释放空间？\r\n\r\n"
+                    + "已完成的文件级覆写不会撤销。",
                     "删除填充文件",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Question,
@@ -1768,11 +2430,16 @@ namespace DiskFill.UI
             _pauseButton.Enabled = false;
             _stopButton.Enabled = false;
 
-            var job = _activeJob;
+            var previousScreenState = _screenState;
+            var preferredRoot = _selectedCards.FirstOrDefault() == null
+                ? jobs[0].VolumeRoot
+                : _selectedCards[0].Drive.RootPath;
             try
             {
-                await Task.Run(() => _jobStore.DeleteJob(job));
-                _activeJob = null;
+                await Task.WhenAll(jobs.Select(job => Task.Run(
+                    () => _jobStore.DeleteJob(job))));
+                _runSessions.Clear();
+                _runStopwatch = null;
                 _selectedInspection = null;
                 _screenState = ScreenState.Idle;
                 _runView.Visible = false;
@@ -1781,7 +2448,7 @@ namespace DiskFill.UI
                 _footerStatusLabel.Text = "填充文件已删除 · 磁盘空间已释放";
                 _cleanupButton.Text = "删除填充文件";
                 _cleanupButton.Glyph = ButtonGlyph.Delete;
-                await RefreshDrivesAsync(job.VolumeRoot);
+                await RefreshDrivesAsync(preferredRoot);
             }
             catch (Exception exception)
             {
@@ -1792,10 +2459,11 @@ namespace DiskFill.UI
                     "DiskFill",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
-                _screenState = ScreenState.Completed;
-                _primaryButton.Enabled = _activeJob != null;
+                _screenState = previousScreenState;
+                _primaryButton.Enabled = _runSessions.Count > 0
+                    || _selectedCards.Count > 0;
                 _cleanupButton.Enabled = true;
-                _pauseButton.Enabled = _activeJob != null;
+                _pauseButton.Enabled = _runSessions.Count > 0;
                 _stopButton.Enabled = true;
             }
         }
@@ -1809,10 +2477,9 @@ namespace DiskFill.UI
                 _runCancellation = null;
             }
 
-            if (_pauseController != null)
+            foreach (var session in _runSessions)
             {
-                _pauseController.Dispose();
-                _pauseController = null;
+                session.PauseController.Dispose();
             }
         }
 
@@ -1841,7 +2508,9 @@ namespace DiskFill.UI
             {
                 var answer = MessageBox.Show(
                     this,
-                    "任务仍在运行。退出会先停止任务，已写入内容会保留，下次可以继续。\r\n\r\n确定退出？",
+                    _runSessions.Count > 1
+                        ? "并行任务仍在运行。退出会先停止全部任务，已写入内容会保留，下次可以继续。\r\n\r\n确定退出？"
+                        : "任务仍在运行。退出会先停止任务，已写入内容会保留，下次可以继续。\r\n\r\n确定退出？",
                     "退出 DiskFill",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Question,
@@ -1854,9 +2523,9 @@ namespace DiskFill.UI
 
                 e.Cancel = true;
                 _closeAfterStop = true;
-                if (_pauseController != null)
+                foreach (var session in _runSessions)
                 {
-                    _pauseController.Resume();
+                    session.PauseController.Resume();
                 }
 
                 _runCancellation.Cancel();
@@ -1895,13 +2564,37 @@ namespace DiskFill.UI
                     _runCancellation.Dispose();
                 }
 
-                if (_pauseController != null)
+                foreach (var session in _runSessions)
                 {
-                    _pauseController.Dispose();
+                    session.PauseController.Dispose();
                 }
             }
 
             base.Dispose(disposing);
+        }
+
+        private sealed class RunSession
+        {
+            public RunSession(FillJob job)
+            {
+                Job = job;
+                PauseController = new PauseController();
+                LatestProgress = new FillProgress
+                {
+                    WrittenBytes = job.WrittenBytes,
+                    TotalBytes = job.PlannedBytes
+                };
+            }
+
+            public FillJob Job { get; private set; }
+
+            public PauseController PauseController { get; private set; }
+
+            public FillProgress LatestProgress { get; set; }
+
+            public FillResult Result { get; set; }
+
+            public bool IsFinished { get; set; }
         }
 
         private sealed class DriveSnapshot

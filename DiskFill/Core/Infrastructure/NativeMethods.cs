@@ -12,6 +12,7 @@ namespace DiskFill.Core.Infrastructure
         internal const uint EsSystemRequired = 0x00000001;
 
         private const uint IoctlStorageQueryProperty = 0x002D1400;
+        private const uint IoctlVolumeGetVolumeDiskExtents = 0x00560000;
         private const uint StorageDeviceSeekPenaltyProperty = 7;
         private const uint PropertyStandardQuery = 0;
 
@@ -43,6 +44,18 @@ namespace DiskFill.Core.Infrastructure
             SafeFileHandle device,
             uint ioControlCode,
             ref StoragePropertyQuery inputBuffer,
+            int inputBufferSize,
+            IntPtr outputBuffer,
+            int outputBufferSize,
+            out uint bytesReturned,
+            IntPtr overlapped);
+
+        [DllImport("kernel32.dll", EntryPoint = "DeviceIoControl", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool DeviceIoControlNoInput(
+            SafeFileHandle device,
+            uint ioControlCode,
+            IntPtr inputBuffer,
             int inputBufferSize,
             IntPtr outputBuffer,
             int outputBufferSize,
@@ -113,6 +126,75 @@ namespace DiskFill.Core.Infrastructure
             }
         }
 
+        internal static bool TryGetVolumeDiskNumbers(string rootPath, out int[] diskNumbers)
+        {
+            diskNumbers = null;
+            if (string.IsNullOrEmpty(rootPath) || rootPath.Length < 2)
+            {
+                return false;
+            }
+
+            var volumePath = @"\\.\" + rootPath.Substring(0, 2);
+            using (var handle = CreateFile(
+                volumePath,
+                0,
+                FileShare.ReadWrite,
+                IntPtr.Zero,
+                FileMode.Open,
+                0,
+                IntPtr.Zero))
+            {
+                if (handle.IsInvalid)
+                {
+                    return false;
+                }
+
+                const int outputSize = 1024;
+                var output = Marshal.AllocHGlobal(outputSize);
+                try
+                {
+                    if (!DeviceIoControlNoInput(
+                        handle,
+                        IoctlVolumeGetVolumeDiskExtents,
+                        IntPtr.Zero,
+                        0,
+                        output,
+                        outputSize,
+                        out uint bytesReturned,
+                        IntPtr.Zero))
+                    {
+                        return false;
+                    }
+
+                    var count = (uint)Marshal.ReadInt32(output);
+                    var extentCount = checked((int)count);
+                    var extentOffset = (int)Marshal.OffsetOf(
+                        typeof(VolumeDiskExtents),
+                        nameof(VolumeDiskExtents.Extent));
+                    var extentSize = Marshal.SizeOf(typeof(DiskExtent));
+                    if (extentCount == 0 || bytesReturned < extentOffset + extentCount * extentSize)
+                    {
+                        return false;
+                    }
+
+                    var numbers = new int[extentCount];
+                    for (var index = 0; index < extentCount; index++)
+                    {
+                        numbers[index] = Marshal.ReadInt32(
+                            output,
+                            extentOffset + index * extentSize);
+                    }
+
+                    diskNumbers = numbers;
+                    return true;
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(output);
+                }
+            }
+        }
+
         internal static bool TryGetVolumeDetails(
             string rootPath,
             out string label,
@@ -159,6 +241,21 @@ namespace DiskFill.Core.Infrastructure
             public uint Size;
             [MarshalAs(UnmanagedType.U1)]
             public bool IncursSeekPenalty;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct VolumeDiskExtents
+        {
+            public uint NumberOfDiskExtents;
+            public DiskExtent Extent;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct DiskExtent
+        {
+            public uint DiskNumber;
+            public long StartingOffset;
+            public long ExtentLength;
         }
     }
 }

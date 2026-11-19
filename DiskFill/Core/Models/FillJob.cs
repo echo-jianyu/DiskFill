@@ -50,6 +50,9 @@ namespace DiskFill.Core.Models
         [DataMember(Order = 14)]
         public DateTime UpdatedUtc { get; set; }
 
+        [DataMember(Order = 15, EmitDefaultValue = false)]
+        public int? PhysicalDiskNumber { get; set; }
+
         [IgnoreDataMember]
         public string JobDirectory { get; set; }
 
@@ -58,9 +61,17 @@ namespace DiskFill.Core.Models
 
         public bool IsCompatibleWith(DriveTarget drive)
         {
-            return drive != null
-                && string.Equals(VolumeSerial, drive.VolumeSerial, StringComparison.OrdinalIgnoreCase)
+            if (drive == null)
+            {
+                return false;
+            }
+
+            var physicalDiskMatches = !PhysicalDiskNumber.HasValue
+                || !drive.PhysicalDiskNumber.HasValue
+                || PhysicalDiskNumber.Value == drive.PhysicalDiskNumber.Value;
+            return string.Equals(VolumeSerial, drive.VolumeSerial, StringComparison.OrdinalIgnoreCase)
                 && VolumeSize == drive.TotalBytes
+                && physicalDiskMatches
                 && SchemaVersion == CurrentSchemaVersion;
         }
     }

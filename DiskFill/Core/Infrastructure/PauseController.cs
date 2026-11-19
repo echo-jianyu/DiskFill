@@ -7,6 +7,7 @@ namespace DiskFill.Core.Infrastructure
     public sealed class PauseController : IDisposable
     {
         private readonly ManualResetEventSlim _gate = new ManualResetEventSlim(true);
+        private bool _disposed;
 
         public bool IsPaused
         {
@@ -41,6 +42,12 @@ namespace DiskFill.Core.Infrastructure
 
         public void Dispose()
         {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
             _gate.Dispose();
         }
     }

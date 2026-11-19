@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-11-19
+
+### Added
+
+- Multi-volume selection for concurrent fills across physically distinct disks.
+- Physical disk extent detection and same-disk selection protection.
+- Aggregated batch progress, total throughput, worst-case ETA, and multi-drive confirmation.
+- Per-disk live progress cards with independent percentage, throughput, written bytes, and ETA.
+
+### Changed
+
+- Pause, resume, stop, retry, and cleanup now operate across the whole selected batch.
+
 ## [1.1.0] - 2026-11-18
 
 ### Changed

@@ -78,14 +78,27 @@ namespace DiskFill.PreviewRenderer
                         fillJob,
                         (long)(totalBytes * 0.42D),
                         null);
-                    mainFormType.GetField(
-                        "_activeJob",
+                    var sessionType = mainFormType.GetNestedType("RunSession", BindingFlags.NonPublic);
+                    var runSessions = (IList)mainFormType.GetField(
+                        "_runSessions",
                         BindingFlags.Instance | BindingFlags.NonPublic)
-                        .SetValue(form, fillJob);
+                        .GetValue(form);
+                    runSessions.Clear();
+                    var session = Activator.CreateInstance(
+                        sessionType,
+                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                        null,
+                        new[] { fillJob },
+                        null);
+                    runSessions.Add(session);
+                    mainFormType.GetField(
+                        "_runStopwatch",
+                        BindingFlags.Instance | BindingFlags.NonPublic)
+                        .SetValue(form, Stopwatch.StartNew());
                     mainFormType.GetMethod(
                         "ApplyRunningState",
                         BindingFlags.Instance | BindingFlags.NonPublic)
-                        .Invoke(form, new[] { fillJob });
+                        .Invoke(form, new[] { runSessions });
 
                     var progressType = assembly.GetType("DiskFill.Core.Models.FillProgress", true);
                     var progress = Activator.CreateInstance(progressType);
@@ -102,7 +115,7 @@ namespace DiskFill.PreviewRenderer
                     mainFormType.GetMethod(
                         "OnFillProgress",
                         BindingFlags.Instance | BindingFlags.NonPublic)
-                        .Invoke(form, new[] { progress });
+                        .Invoke(form, new[] { session, progress });
                     PumpMessages(TimeSpan.FromMilliseconds(250));
                     Capture(form, Path.Combine(outputDirectory, "ui-running.png"));
 
@@ -129,6 +142,137 @@ namespace DiskFill.PreviewRenderer
                     PumpMessages(TimeSpan.FromMilliseconds(250));
                     Capture(form, Path.Combine(outputDirectory, "ui-complete.png"));
 
+                    var driveTargetType = assembly.GetType("DiskFill.Core.Models.DriveTarget", true);
+                    var previewDriveOne = CreatePreviewDrive(
+                        driveTargetType,
+                        drive,
+                        "D:\\",
+                        "D:",
+                        "测试磁盘 A",
+                        "PREVIEW0001",
+                        2,
+                        340L * 1024 * 1024 * 1024);
+                    var previewDriveTwo = CreatePreviewDrive(
+                        driveTargetType,
+                        drive,
+                        "E:\\",
+                        "E:",
+                        "测试磁盘 B",
+                        "PREVIEW0002",
+                        3,
+                        260L * 1024 * 1024 * 1024);
+                    var driveCardType = assembly.GetType("DiskFill.UI.Controls.DriveCard", true);
+                    var selectedCards = (IList)mainFormType.GetField(
+                        "_selectedCards",
+                        BindingFlags.Instance | BindingFlags.NonPublic)
+                        .GetValue(form);
+                    selectedCards.Clear();
+                    selectedCards.Add(Activator.CreateInstance(
+                        driveCardType,
+                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                        null,
+                        new[] { previewDriveOne },
+                        null));
+                    selectedCards.Add(Activator.CreateInstance(
+                        driveCardType,
+                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                        null,
+                        new[] { previewDriveTwo },
+                        null));
+                    mainFormType.GetField("_selectedDrive", BindingFlags.Instance | BindingFlags.NonPublic)
+                        .SetValue(form, previewDriveOne);
+                    mainFormType.GetField("_selectedInspection", BindingFlags.Instance | BindingFlags.NonPublic)
+                        .SetValue(form, null);
+                    mainFormType.GetMethod(
+                        "UpdateMultiSelectionPanel",
+                        BindingFlags.Instance | BindingFlags.NonPublic)
+                        .Invoke(form, null);
+
+                    runSessions.Clear();
+                    var multiJobOne = CreatePreviewJob(
+                        fillJobType,
+                        assembly,
+                        "D:\\",
+                        "PREVIEW0001",
+                        340L * 1024 * 1024 * 1024);
+                    var multiJobTwo = CreatePreviewJob(
+                        fillJobType,
+                        assembly,
+                        "E:\\",
+                        "PREVIEW0002",
+                        260L * 1024 * 1024 * 1024);
+                    var multiSessionOne = Activator.CreateInstance(
+                        sessionType,
+                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                        null,
+                        new[] { multiJobOne },
+                        null);
+                    var multiSessionTwo = Activator.CreateInstance(
+                        sessionType,
+                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                        null,
+                        new[] { multiJobTwo },
+                        null);
+                    runSessions.Add(multiSessionOne);
+                    runSessions.Add(multiSessionTwo);
+                    mainFormType.GetField(
+                        "_runStopwatch",
+                        BindingFlags.Instance | BindingFlags.NonPublic)
+                        .SetValue(form, Stopwatch.StartNew());
+                    var screenStateType = mainFormType.GetNestedType("ScreenState", BindingFlags.NonPublic);
+                    mainFormType.GetField("_screenState", BindingFlags.Instance | BindingFlags.NonPublic)
+                        .SetValue(form, Enum.ToObject(screenStateType, 1));
+                    mainFormType.GetMethod(
+                        "InitializeRunProgressCards",
+                        BindingFlags.Instance | BindingFlags.NonPublic)
+                        .Invoke(form, null);
+                    mainFormType.GetMethod(
+                        "ApplyRunningState",
+                        BindingFlags.Instance | BindingFlags.NonPublic)
+                        .Invoke(form, new[] { runSessions });
+
+                    var multiProgressOne = CreatePreviewProgress(
+                        progressType,
+                        240L * 1024 * 1024 * 1024,
+                        340L * 1024 * 1024 * 1024,
+                        132D * 1024D * 1024D,
+                        7200D);
+                    var multiProgressTwo = CreatePreviewProgress(
+                        progressType,
+                        128L * 1024 * 1024 * 1024,
+                        260L * 1024 * 1024 * 1024,
+                        96D * 1024D * 1024D,
+                        7200D);
+                    mainFormType.GetMethod(
+                        "OnFillProgress",
+                        BindingFlags.Instance | BindingFlags.NonPublic)
+                        .Invoke(form, new[] { multiSessionOne, multiProgressOne });
+                    mainFormType.GetMethod(
+                        "OnFillProgress",
+                        BindingFlags.Instance | BindingFlags.NonPublic)
+                        .Invoke(form, new[] { multiSessionTwo, multiProgressTwo });
+                    PumpMessages(TimeSpan.FromMilliseconds(250));
+                    Capture(form, Path.Combine(outputDirectory, "ui-running-multi.png"));
+
+                    var multiResult = Activator.CreateInstance(resultType);
+                    resultType.GetProperty("WrittenBytes").SetValue(
+                        multiResult,
+                        600L * 1024 * 1024 * 1024,
+                        null);
+                    resultType.GetProperty("Elapsed").SetValue(multiResult, TimeSpan.FromHours(2.1D), null);
+                    resultType.GetProperty("CompletionKind").SetValue(
+                        multiResult,
+                        Enum.ToObject(
+                            assembly.GetType("DiskFill.Core.Models.FillCompletionKind", true),
+                            0),
+                        null);
+                    mainFormType.GetMethod(
+                        "ShowCompletedState",
+                        BindingFlags.Instance | BindingFlags.NonPublic)
+                        .Invoke(form, new[] { multiResult });
+                    PumpMessages(TimeSpan.FromMilliseconds(250));
+                    Capture(form, Path.Combine(outputDirectory, "ui-complete-multi.png"));
+
                     var dialogType = assembly.GetType("DiskFill.UI.Dialogs.ConfirmFillDialog", true);
                     var dialog = (Form)Activator.CreateInstance(
                         dialogType,
@@ -149,6 +293,29 @@ namespace DiskFill.PreviewRenderer
                         dialog.Close();
                         dialog.Dispose();
                     }
+
+                    var multiDriveArray = Array.CreateInstance(driveTargetType, 2);
+                    multiDriveArray.SetValue(previewDriveOne, 0);
+                    multiDriveArray.SetValue(previewDriveTwo, 1);
+                    var multiDialog = (Form)Activator.CreateInstance(
+                        dialogType,
+                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                        null,
+                        new object[] { multiDriveArray },
+                        null);
+                    multiDialog.StartPosition = FormStartPosition.Manual;
+                    multiDialog.Location = new Point(0, 0);
+                    try
+                    {
+                        multiDialog.Show();
+                        PumpMessages(TimeSpan.FromMilliseconds(350));
+                        Capture(multiDialog, Path.Combine(outputDirectory, "ui-confirm-multi.png"));
+                    }
+                    finally
+                    {
+                        multiDialog.Close();
+                        multiDialog.Dispose();
+                    }
                 }
             }
             finally
@@ -167,6 +334,75 @@ namespace DiskFill.PreviewRenderer
             }
 
             Console.WriteLine(path);
+        }
+
+        private static object CreatePreviewDrive(
+            Type driveTargetType,
+            object source,
+            string root,
+            string displayName,
+            string label,
+            string serial,
+            int physicalDisk,
+            long availableBytes)
+        {
+            var drive = Activator.CreateInstance(driveTargetType);
+            driveTargetType.GetProperty("RootPath").SetValue(drive, root, null);
+            driveTargetType.GetProperty("DisplayName").SetValue(drive, displayName, null);
+            driveTargetType.GetProperty("Label").SetValue(drive, label, null);
+            driveTargetType.GetProperty("FileSystem").SetValue(drive, "NTFS", null);
+            driveTargetType.GetProperty("VolumeSerial").SetValue(drive, serial, null);
+            driveTargetType.GetProperty("TotalBytes").SetValue(
+                drive,
+                availableBytes + 20L * 1024 * 1024 * 1024,
+                null);
+            driveTargetType.GetProperty("AvailableBytes").SetValue(drive, availableBytes, null);
+            driveTargetType.GetProperty("MediaKind").SetValue(
+                drive,
+                source.GetType().GetProperty("MediaKind").GetValue(source, null),
+                null);
+            driveTargetType.GetProperty("PhysicalDiskNumber").SetValue(
+                drive,
+                physicalDisk,
+                null);
+            driveTargetType.GetProperty("SpansMultiplePhysicalDisks").SetValue(drive, false, null);
+            driveTargetType.GetProperty("IneligibleReason").SetValue(drive, string.Empty, null);
+            return drive;
+        }
+
+        private static object CreatePreviewJob(
+            Type fillJobType,
+            Assembly assembly,
+            string root,
+            string serial,
+            long plannedBytes)
+        {
+            var job = Activator.CreateInstance(fillJobType);
+            fillJobType.GetProperty("JobId").SetValue(job, Guid.NewGuid().ToString("N"), null);
+            fillJobType.GetProperty("VolumeRoot").SetValue(job, root, null);
+            fillJobType.GetProperty("VolumeSerial").SetValue(job, serial, null);
+            fillJobType.GetProperty("Mode").SetValue(
+                job,
+                Enum.ToObject(assembly.GetType("DiskFill.Core.Models.OverwriteMode", true), 0),
+                null);
+            fillJobType.GetProperty("PlannedBytes").SetValue(job, plannedBytes, null);
+            fillJobType.GetProperty("WrittenBytes").SetValue(job, 0L, null);
+            return job;
+        }
+
+        private static object CreatePreviewProgress(
+            Type progressType,
+            long writtenBytes,
+            long totalBytes,
+            double bytesPerSecond,
+            double elapsedSeconds)
+        {
+            var progress = Activator.CreateInstance(progressType);
+            progressType.GetProperty("WrittenBytes").SetValue(progress, writtenBytes, null);
+            progressType.GetProperty("TotalBytes").SetValue(progress, totalBytes, null);
+            progressType.GetProperty("BytesPerSecond").SetValue(progress, bytesPerSecond, null);
+            progressType.GetProperty("ElapsedSeconds").SetValue(progress, elapsedSeconds, null);
+            return progress;
         }
 
         private static void PumpMessages(TimeSpan duration)

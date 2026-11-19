@@ -20,6 +20,10 @@ namespace DiskFill.Core.Models
 
         public MediaKind MediaKind { get; set; }
 
+        public int? PhysicalDiskNumber { get; set; }
+
+        public bool SpansMultiplePhysicalDisks { get; set; }
+
         public string IneligibleReason { get; set; }
 
         public bool IsEligible
@@ -54,6 +58,26 @@ namespace DiskFill.Core.Models
 
                 return RootPath.Substring(0, Math.Min(2, RootPath.Length));
             }
+        }
+
+        public string PhysicalDiskDescription
+        {
+            get
+            {
+                if (SpansMultiplePhysicalDisks)
+                {
+                    return "跨物理磁盘";
+                }
+
+                return PhysicalDiskNumber.HasValue
+                    ? "物理磁盘 #" + PhysicalDiskNumber.Value
+                    : "物理磁盘未知";
+            }
+        }
+
+        public bool HasKnownPhysicalDisk
+        {
+            get { return PhysicalDiskNumber.HasValue && !SpansMultiplePhysicalDisks; }
         }
 
         public override string ToString()

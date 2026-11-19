@@ -117,6 +117,7 @@ namespace DiskFill.Core.Services
                 JobId = Guid.NewGuid().ToString("N"),
                 VolumeRoot = drive.RootPath,
                 VolumeSerial = drive.VolumeSerial,
+                PhysicalDiskNumber = drive.PhysicalDiskNumber,
                 VolumeSize = drive.TotalBytes,
                 VolumeLabel = drive.Label,
                 FileSystem = drive.FileSystem,

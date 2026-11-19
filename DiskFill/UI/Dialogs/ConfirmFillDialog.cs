@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 using DiskFill.Core.Infrastructure;
 using DiskFill.Core.Models;
@@ -9,16 +11,22 @@ namespace DiskFill.UI.Dialogs
 {
     internal sealed class ConfirmFillDialog : Form
     {
-        private readonly DriveTarget _drive;
+        private readonly IReadOnlyList<DriveTarget> _drives;
         private readonly TextBox _confirmationTextBox;
         private readonly ActionButton _confirmButton;
 
         public ConfirmFillDialog(DriveTarget drive)
+            : this(new[] { drive })
         {
-            _drive = drive ?? throw new ArgumentNullException(nameof(drive));
-            if (string.IsNullOrEmpty(drive.DriveLetter))
+        }
+
+        public ConfirmFillDialog(IReadOnlyList<DriveTarget> drives)
+        {
+            _drives = drives ?? throw new ArgumentNullException(nameof(drives));
+            if (_drives.Count == 0 || _drives.Any(drive =>
+                drive == null || string.IsNullOrEmpty(drive.DriveLetter)))
             {
-                throw new ArgumentException("The target drive has no drive letter.", nameof(drive));
+                throw new ArgumentException("At least one drive with a drive letter is required.", nameof(drives));
             }
 
             InitializeWindow();
@@ -53,7 +61,7 @@ namespace DiskFill.UI.Dialogs
                 Dock = DockStyle.Fill,
                 Font = new Font("Microsoft YaHei UI", 13F, FontStyle.Regular),
                 BorderStyle = BorderStyle.FixedSingle,
-                MaxLength = 2,
+                MaxLength = _drives.Count,
                 CharacterCasing = CharacterCasing.Upper,
                 AccessibleName = "确认盘符",
                 Margin = new Padding(0)
@@ -121,7 +129,7 @@ namespace DiskFill.UI.Dialogs
                 Dock = DockStyle.Fill,
                 Font = AppTheme.BodySemibold,
                 ForeColor = AppTheme.Ink,
-                Text = "请输入盘符 " + _drive.DriveLetter.Substring(0, 1) + " 以确认",
+                Text = GetConfirmationInstruction(),
                 TextAlign = ContentAlignment.BottomLeft,
                 Margin = Padding.Empty
             };
@@ -132,7 +140,9 @@ namespace DiskFill.UI.Dialogs
             {
                 Dock = DockStyle.Fill,
                 Height = 62,
-                Text = "请确认该盘已经格式化并完成备份。开始后请勿强制断电；中断后可继续写入。",
+                Text = _drives.Count == 1
+                    ? "请确认该盘已经格式化并完成备份。开始后请勿强制断电；中断后可继续写入。"
+                    : "请确认这些磁盘已经格式化并完成备份。并行任务会同时写入多块物理磁盘，开始后请勿强制断电。",
                 Margin = Padding.Empty
             };
             layout.Controls.Add(notice, 0, 7);
@@ -172,7 +182,9 @@ namespace DiskFill.UI.Dialogs
                 Font = new Font("Microsoft YaHei UI", 15F, FontStyle.Bold),
                 ForeColor = AppTheme.Ink,
                 Location = new Point(64, 1),
-                Text = "确认覆写 " + _drive.DisplayName
+                Text = _drives.Count == 1
+                    ? "确认覆写 " + _drives[0].DisplayName
+                    : "确认并行覆写 " + _drives.Count + " 块磁盘"
             };
             var subtitle = new Label
             {
@@ -181,7 +193,9 @@ namespace DiskFill.UI.Dialogs
                 ForeColor = AppTheme.Muted,
                 Location = new Point(64, 33),
                 Size = new Size(396, 28),
-                Text = "已格式化的机械硬盘将按顺序写入，直到可用空间耗尽。"
+                Text = _drives.Count == 1
+                    ? "已格式化的机械硬盘将按顺序写入，直到可用空间耗尽。"
+                    : "多块物理磁盘将各自顺序写入，直到所有可用空间耗尽。"
             };
             header.Controls.Add(warningIcon);
             header.Controls.Add(title);
@@ -196,23 +210,54 @@ namespace DiskFill.UI.Dialogs
                 Dock = DockStyle.Fill,
                 Margin = Padding.Empty
             };
-            AddSummaryRow(summary, "目标磁盘", _drive.DisplayName + "  " + _drive.Label, 15);
-            AddSummaryRow(summary, "可写入空间", ByteFormatter.Format(_drive.AvailableBytes), 45);
+            AddSummaryRow(
+                summary,
+                "目标磁盘",
+                string.Join("、", _drives.Select(drive => drive.DisplayName)),
+                15);
+            AddSummaryRow(
+                summary,
+                "可写入空间",
+                ByteFormatter.Format(_drives.Sum(drive => drive.AvailableBytes)),
+                45);
             AddSummaryRow(
                 summary,
                 "介质与文件系统",
-                _drive.MediaDescription + " · " + _drive.FileSystem,
+                _drives.Count == 1
+                    ? _drives[0].MediaDescription + " · " + _drives[0].FileSystem
+                    : GetMultiDriveDescription(),
                 75);
             return summary;
         }
 
         private void OnConfirmationTextChanged(object sender, EventArgs e)
         {
-            var expected = _drive.DriveLetter.Substring(0, 1);
             _confirmButton.Enabled = string.Equals(
                 _confirmationTextBox.Text.Trim(),
-                expected,
+                GetExpectedConfirmation(),
                 StringComparison.OrdinalIgnoreCase);
+        }
+
+        private string GetConfirmationInstruction()
+        {
+            var letters = string.Concat(_drives.Select(drive => drive.DriveLetter[0]));
+            return _drives.Count == 1
+                ? "请输入盘符 " + letters + " 以确认"
+                : "请输入 " + _drives.Count + " 个盘符 " + letters + " 以确认";
+        }
+
+        private string GetExpectedConfirmation()
+        {
+            return string.Concat(_drives.Select(drive => drive.DriveLetter[0]));
+        }
+
+        private string GetMultiDriveDescription()
+        {
+            var media = _drives.All(drive => drive.MediaKind == MediaKind.Rotational)
+                ? "机械硬盘 ×" + _drives.Count
+                : "混合介质";
+            return media + " · "
+                + string.Join("/", _drives.Select(drive => drive.FileSystem).Distinct());
         }
 
         private void OnConfirmClicked(object sender, EventArgs e)
@@ -240,6 +285,7 @@ namespace DiskFill.UI.Dialogs
             var valueLabel = new Label
             {
                 AutoSize = false,
+                AutoEllipsis = true,
                 Font = AppTheme.BodySemibold,
                 ForeColor = AppTheme.Ink,
                 Location = new Point(160, top),
